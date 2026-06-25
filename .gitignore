@@ -1,0 +1,21 @@
+# Binaries
+/idle-hands
+/idle-hands.exe
+/dist/
+/bin/
+
+# Go
+*.test
+*.out
+coverage.*
+vendor/
+
+# Local runtime state
+.idle-hands/
+state.json
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
