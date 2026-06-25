@@ -1,5 +1,7 @@
 # idle-hands 🙌
 
+[![CI](https://github.com/rwrife/idle-hands/actions/workflows/ci.yml/badge.svg)](https://github.com/rwrife/idle-hands/actions/workflows/ci.yml)
+
 > Idle hands are the devil's workshop. Yours are about to get a job.
 
 A pocket-sized **break coach for the dead time while your AI coding agent thinks.**
@@ -38,6 +40,23 @@ returns your focus to the task.
 go install github.com/rwrife/idle-hands/cmd/idle-hands@latest
 idle-hands watch -- <your-agent-command>
 idle-hands stats        # "reclaimed 14 min of spinner-staring today"
+```
+
+> **Today (M1):** `watch` is a transparent passthrough — it runs your command
+> and gets out of the way. Idle detection and cards land in M2–M4.
+
+## Build from source
+
+Requires Go 1.23+.
+
+```bash
+git clone https://github.com/rwrife/idle-hands
+cd idle-hands
+go build ./cmd/idle-hands       # produces ./idle-hands
+./idle-hands watch -- echo hi   # prints: hi
+./idle-hands version
+
+go test ./...                   # run the test suite
 ```
 
 ## Decks
