@@ -42,8 +42,10 @@ idle-hands watch -- <your-agent-command>
 idle-hands stats        # "reclaimed 14 min of spinner-staring today"
 ```
 
-> **Today (M1):** `watch` is a transparent passthrough — it runs your command
-> and gets out of the way. Idle detection and cards land in M2–M4.
+> **Today (M2):** `watch` runs your command under a real pseudo-terminal and
+> passes I/O straight through — interactive agent TUIs render exactly as they
+> would unwrapped, and the exit code is preserved. A copy of the output is
+> already tapped internally; the BUSY/IDLE detector and cards land in M3–M4.
 
 ## Build from source
 
@@ -57,6 +59,14 @@ go build ./cmd/idle-hands       # produces ./idle-hands
 ./idle-hands version
 
 go test ./...                   # run the test suite
+```
+
+To eyeball the wrapper, run the bundled noisy stand-in agent directly and then
+under `watch` — they should look identical:
+
+```bash
+scripts/fake-agent.sh                          # bursts of output + quiet "thinking" gaps
+./idle-hands watch -- scripts/fake-agent.sh    # same, through the wrapper
 ```
 
 ## Decks
