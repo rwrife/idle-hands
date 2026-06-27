@@ -3,6 +3,7 @@ package main
 import (
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -63,5 +64,23 @@ func TestWatchNoCommand(t *testing.T) {
 	}
 	if code := run([]string{"watch", "--"}); code != 2 {
 		t.Fatalf("watch bare -- exit code = %d, want 2", code)
+	}
+}
+
+// TestWatchMissingCommand guards against a regression where a child that fails
+// to start would leave the output tap unclosed and deadlock the drain in
+// cmdWatch. It must return promptly with a non-zero exit code.
+func TestWatchMissingCommand(t *testing.T) {
+	done := make(chan int, 1)
+	go func() {
+		done <- run([]string{"watch", "--", "idle-hands-no-such-binary-xyz"})
+	}()
+	select {
+	case code := <-done:
+		if code == 0 {
+			t.Fatalf("missing-command exit code = %d, want non-zero", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("watch with missing command hung (tap not closed?)")
 	}
 }
