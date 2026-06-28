@@ -1,0 +1,42 @@
+# duck — one rubber-duck question about the work you're waiting on.
+# The goal isn't to answer it now; it's to surface the question so the
+# answer is waiting when the agent hands the diff back.
+name = "duck"
+description = "One rubber-duck question about what you're building."
+emoji = "🦆"
+
+[[cards]]
+title = "The one-liner"
+text = "In one sentence, what is the thing you just asked the agent to do?"
+
+[[cards]]
+title = "How will you know?"
+text = "What's the one check that proves this change actually worked?"
+
+[[cards]]
+title = "The blast radius"
+text = "What else could this change break? Name one caller you'd want to retest."
+
+[[cards]]
+title = "Name the assumption"
+text = "What are you assuming is true that you haven't actually verified?"
+
+[[cards]]
+title = "The simpler path"
+text = "If you had to ship this in 10 lines, what would you cut?"
+
+[[cards]]
+title = "Who's the user?"
+text = "Who hits this code path, and what do they feel when it's slow or wrong?"
+
+[[cards]]
+title = "The rollback"
+text = "If this goes sideways in prod, how do you undo it in under a minute?"
+
+[[cards]]
+title = "The missing test"
+text = "What's the one edge case a reviewer will ask 'but what about…' on?"
+
+[[cards]]
+title = "Explain it out loud"
+text = "Say what the diff does to an imaginary teammate. Where do you stumble?"

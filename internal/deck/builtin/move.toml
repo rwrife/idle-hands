@@ -1,0 +1,37 @@
+# move — reclaim the wait with a 30-second body reset.
+# Stretch, posture, eyes, hydration. One card, then back to it.
+name = "move"
+description = "Stretch, posture, eyes, hydrate."
+emoji = "🧍"
+
+[[cards]]
+title = "Shoulder reset"
+text = "Stand up. Roll your shoulders back 5×, then drop them away from your ears."
+
+[[cards]]
+title = "20-20-20"
+text = "Look at something ~20 ft away for 20 seconds. Let your eyes unfocus."
+
+[[cards]]
+title = "Sip water"
+text = "Take three real sips of water. Future-you is already dehydrated."
+
+[[cards]]
+title = "Stand & breathe"
+text = "Stand up. One slow breath in for 4, out for 6. Unclench your jaw."
+
+[[cards]]
+title = "Wrist rolls"
+text = "Roll each wrist 5× one way, 5× the other. Shake out your hands."
+
+[[cards]]
+title = "Neck release"
+text = "Drop your right ear toward your right shoulder, hold 10s. Switch sides."
+
+[[cards]]
+title = "Stand tall"
+text = "Plant both feet, lengthen your spine, tuck your chin. Hold for 5 breaths."
+
+[[cards]]
+title = "Look out a window"
+text = "Find the furthest thing you can see and stare at it for 15 seconds."

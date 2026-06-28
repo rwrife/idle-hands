@@ -1,0 +1,37 @@
+# tidy — close one stray thing. Not your whole backlog. One.
+# The wait is exactly long enough to clear a single small mess.
+name = "tidy"
+description = "Close one stray tab / triage one stale TODO."
+emoji = "🧹"
+
+[[cards]]
+title = "Close one tab"
+text = "Pick the most pointless browser tab you have open and close it. Just one."
+
+[[cards]]
+title = "Triage one TODO"
+text = "Find one `TODO` in the file you're in. Delete it, do it, or file it."
+
+[[cards]]
+title = "Stage the obvious"
+text = "Glance at your diff. Is there a stray debug print or commented block? Kill it."
+
+[[cards]]
+title = "Name the branch"
+text = "Is your branch still called `fix-stuff-2`? Rename it to something true."
+
+[[cards]]
+title = "One inbox line"
+text = "Archive or reply to exactly one email. Then close the tab."
+
+[[cards]]
+title = "Clear the desk"
+text = "Move one physical thing off your desk that doesn't belong there."
+
+[[cards]]
+title = "Drop a note"
+text = "Jot the next step for this task somewhere future-you will see it."
+
+[[cards]]
+title = "Kill a notification"
+text = "Clear one nagging red badge. Dismiss it or deal with it — your call."
