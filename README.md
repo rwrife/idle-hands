@@ -42,10 +42,14 @@ idle-hands watch -- <your-agent-command>
 idle-hands stats        # "reclaimed 14 min of spinner-staring today"
 ```
 
-> **Today (M2):** `watch` runs your command under a real pseudo-terminal and
-> passes I/O straight through — interactive agent TUIs render exactly as they
-> would unwrapped, and the exit code is preserved. A copy of the output is
-> already tapped internally; the BUSY/IDLE detector and cards land in M3–M4.
+> **Today (M3):** `watch` runs your command under a real pseudo-terminal,
+> passes I/O straight through (interactive agent TUIs render exactly as they
+> would unwrapped, exit code preserved), and now feeds the tapped output to the
+> **BUSY/IDLE detector**. When output goes quiet for the busy threshold
+> (default 20s) — ignoring spinner/"thinking" repaints so a chatty spinner
+> can't fool it — `idle-hands` notes that the agent is thinking; the next real
+> output flips it back. For now state changes print a one-line notice on
+> stderr; the rendered cards land in M4.
 
 ## Build from source
 
@@ -67,6 +71,20 @@ under `watch` — they should look identical:
 ```bash
 scripts/fake-agent.sh                          # bursts of output + quiet "thinking" gaps
 ./idle-hands watch -- scripts/fake-agent.sh    # same, through the wrapper
+```
+
+To watch the BUSY/IDLE detector fire, give the fake agent a "thinking" gap
+longer than the 20s busy threshold (the spinner keeps repainting the whole time
+— the detector treats it as noise and still flips to BUSY):
+
+```bash
+# one ~23s think gap + spinner, then a work burst
+ROUNDS=1 THINK=23 BURST=4 SPINNER=1 ./idle-hands watch -- bash scripts/fake-agent.sh
+#   idle-hands: 🤖 agent is thinking — your move (idle for 20s)
+#   idle-hands: 👋 agent's back — reclaimed 3s
+
+# short 3s gaps stay under the threshold → no notices (no flapping)
+ROUNDS=3 THINK=3 BURST=3 ./idle-hands watch -- bash scripts/fake-agent.sh
 ```
 
 ## Decks
