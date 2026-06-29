@@ -42,14 +42,16 @@ idle-hands watch -- <your-agent-command>
 idle-hands stats        # "reclaimed 14 min of spinner-staring today"
 ```
 
-> **Today (M3):** `watch` runs your command under a real pseudo-terminal,
+> **Today (M4):** `watch` runs your command under a real pseudo-terminal,
 > passes I/O straight through (interactive agent TUIs render exactly as they
-> would unwrapped, exit code preserved), and now feeds the tapped output to the
+> would unwrapped, exit code preserved), and feeds the tapped output to the
 > **BUSY/IDLE detector**. When output goes quiet for the busy threshold
 > (default 20s) — ignoring spinner/"thinking" repaints so a chatty spinner
-> can't fool it — `idle-hands` notes that the agent is thinking; the next real
-> output flips it back. For now state changes print a one-line notice on
-> stderr; the rendered cards land in M4.
+> can't fool it — `idle-hands` renders **exactly one styled card** from the
+> built-in `move` deck and clears it the instant real output resumes
+> ("👋 agent's back — reclaimed Ns"). One card per busy window, no repeats
+> back-to-back. Cards print on stderr so the agent's own output stays clean.
+> Choosing the deck via config arrives in M5.
 
 ## Build from source
 
@@ -73,27 +75,36 @@ scripts/fake-agent.sh                          # bursts of output + quiet "think
 ./idle-hands watch -- scripts/fake-agent.sh    # same, through the wrapper
 ```
 
-To watch the BUSY/IDLE detector fire, give the fake agent a "thinking" gap
-longer than the 20s busy threshold (the spinner keeps repainting the whole time
-— the detector treats it as noise and still flips to BUSY):
+To watch the BUSY/IDLE detector fire a card, give the fake agent a "thinking"
+gap longer than the 20s busy threshold (the spinner keeps repainting the whole
+time — the detector treats it as noise and still flips to BUSY, then renders one
+card):
 
 ```bash
 # one ~23s think gap + spinner, then a work burst
 ROUNDS=1 THINK=23 BURST=4 SPINNER=1 ./idle-hands watch -- bash scripts/fake-agent.sh
-#   idle-hands: 🤖 agent is thinking — your move (idle for 20s)
-#   idle-hands: 👋 agent's back — reclaimed 3s
+#   ╭─ …agent is thinking (20s) ──────────╮
+#   │  🧍  Shoulder reset                   │
+#   │  Stand up. Roll your shoulders back 5×. │
+#   ╰─────────────────── one card ──╯
+#   👋 agent's back — reclaimed 3s   (card clears the moment output resumes)
 
-# short 3s gaps stay under the threshold → no notices (no flapping)
+# short 3s gaps stay under the threshold → no card (no flapping)
 ROUNDS=3 THINK=3 BURST=3 ./idle-hands watch -- bash scripts/fake-agent.sh
 ```
 
 ## Decks
 
-- **move** — stretch, posture, eyes, hydrate
+On each busy window, `idle-hands` shows one card from a deck. Three ship
+embedded in the binary (no config needed):
+
+- **move** — stretch, posture, eyes, hydrate _(the default)_
 - **duck** — one rubber-duck question about what you're building
 - **tidy** — close one stray tab / triage one stale TODO
 
-Bring your own under `~/.idle-hands/decks/*.toml`.
+The same card is never shown twice in a row, and each busy window gets exactly
+one. Picking a non-default deck via config, and bringing your own under
+`~/.idle-hands/decks/*.toml`, arrive in M5/M6.
 
 ## License
 

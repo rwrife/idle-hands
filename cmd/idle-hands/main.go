@@ -1,7 +1,7 @@
 // Command idle-hands is a pocket-sized break coach for the dead time while your
-// AI coding agent thinks. This is the M1 scaffold: it wires up subcommand
-// routing, a `version` command, and a stub `watch` that transparently execs the
-// wrapped command (no BUSY/IDLE detection yet — that arrives in later milestones).
+// AI coding agent thinks. It wires up subcommand routing, a `version` command,
+// and the `watch` wrapper that runs your agent transparently, detects its
+// BUSY/IDLE windows, and shows one micro-action card while it's thinking.
 package main
 
 import (
@@ -18,9 +18,9 @@ Usage:
   idle-hands <command> [args...]
 
 Commands:
-  watch -- <cmd> [args...]   Run <cmd>, passing I/O straight through.
-                             (M1 stub: no idle detection yet.)
-  stats                      Show reclaimed idle time. (not yet implemented)
+  watch -- <cmd> [args...]   Run <cmd>, passing I/O straight through, and show
+                             one micro-action card while it's "thinking".
+  stats                      Show reclaimed idle time. (coming in M5)
   version                    Print the build version.
   help                       Show this help.
 
