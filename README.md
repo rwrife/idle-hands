@@ -32,28 +32,42 @@ returns your focus to the task.
 
 ## Status
 
-🚧 Early. See [`PLAN.md`](./PLAN.md) for scope, milestones, and backlog.
+**v0.1 — feature-complete.** Wrap your agent, get one card per think-window,
+bring your own decks, tune it with config, and check your reclaimed time. See
+[`PLAN.md`](./PLAN.md) for the full scope, milestones, and v0.2+ backlog.
 
-## Quick start (planned)
+## Install
+
+Grab a prebuilt binary from the [latest release](https://github.com/rwrife/idle-hands/releases/latest)
+(macOS / Linux / Windows, amd64 & arm64): download the archive for your
+platform, extract `idle-hands`, and put it on your `PATH`.
+
+Or with Go (1.23+):
 
 ```bash
 go install github.com/rwrife/idle-hands/cmd/idle-hands@latest
-idle-hands watch -- <your-agent-command>
-idle-hands stats        # "reclaimed 14 min across 9 waits today"
 ```
 
-> **Today (M5):** `watch` runs your command under a real pseudo-terminal,
-> passes I/O straight through (interactive agent TUIs render exactly as they
-> would unwrapped, exit code preserved), and feeds the tapped output to the
-> **BUSY/IDLE detector**. When output goes quiet for the busy threshold —
-> ignoring spinner/"thinking" repaints so a chatty spinner can't fool it —
-> `idle-hands` renders **exactly one styled card** and clears it the instant
-> real output resumes ("👋 agent's back — reclaimed Ns"). One card per busy
-> window, no repeats back-to-back. Cards print on stderr so the agent's own
-> output stays clean. **New in M5:** the deck, busy threshold, and quiet hours
-> are configurable via `~/.idle-hands/config.toml`, every reclaimed window is
-> tallied to `~/.idle-hands/state.json`, and `idle-hands stats` reports your
-> reclaimed time for the day.
+Then wrap your agent and get on with it:
+
+```bash
+idle-hands watch -- <your-agent-command>   # e.g. claude, aider, codex
+idle-hands deck                            # see the available decks
+idle-hands stats                           # "reclaimed 14 min across 9 waits today"
+```
+
+## How it works
+
+`watch` runs your command under a real pseudo-terminal and passes I/O straight
+through — interactive agent TUIs render exactly as they would unwrapped, and the
+exit code is preserved. It feeds the tapped output to the **BUSY/IDLE detector**:
+when output goes quiet for the busy threshold (ignoring spinner/"thinking"
+repaints so a chatty spinner can't fool it), `idle-hands` renders **exactly one
+styled card** and clears it the instant real output resumes ("👋 agent's back —
+reclaimed Ns"). One card per busy window, never the same one twice in a row.
+Cards print on stderr so the agent's own output stays clean. The deck, busy
+threshold, and quiet hours come from `~/.idle-hands/config.toml`; every reclaimed
+window is tallied to `~/.idle-hands/state.json` for `idle-hands stats`.
 
 ## Build from source
 
@@ -64,6 +78,7 @@ git clone https://github.com/rwrife/idle-hands
 cd idle-hands
 go build ./cmd/idle-hands       # produces ./idle-hands
 ./idle-hands watch -- echo hi   # prints: hi
+./idle-hands deck               # list available decks
 ./idle-hands stats              # reclaimed-time summary
 ./idle-hands version
 
@@ -106,8 +121,37 @@ embedded in the binary (no config needed):
 - **tidy** — close one stray tab / triage one stale TODO
 
 The same card is never shown twice in a row, and each busy window gets exactly
-one. Pick a non-default deck in config (below). Bringing your own under
-`~/.idle-hands/decks/*.toml` arrives in M6.
+one. List what you've got, or preview a deck's cards before selecting it:
+
+```bash
+$ idle-hands deck            # list every deck (built-in + your own)
+$ idle-hands deck duck       # preview every card in the duck deck
+```
+
+### Bring your own deck
+
+Drop any number of `*.toml` files in `~/.idle-hands/decks/` and they show up
+alongside the built-ins. A user deck whose `name` matches a built-in **overrides**
+it (so you can replace `move` with your own stretches). The format is the same
+one the built-ins use:
+
+```toml
+# ~/.idle-hands/decks/focus.toml
+name = "focus"
+description = "Tiny refocus prompts."
+emoji = "🎯"
+
+[[cards]]
+title = "One thing"
+text = "Name the single next action. Just one."
+
+[[cards]]
+title = "Why now?"
+text = "Is this the most important thing, or just the loudest?"
+```
+
+Select it in config (`deck = "focus"`). A malformed deck file is reported loudly
+rather than silently skipped, so a typo never just vanishes.
 
 ## Config
 
@@ -116,7 +160,7 @@ a 20s threshold, no quiet hours). Drop a `~/.idle-hands/config.toml` to tune it;
 changes take effect on the next run:
 
 ```toml
-deck = "duck"            # which deck to show: move | duck | tidy
+deck = "duck"            # which deck to show: move | duck | tidy | <your-deck>
 busy_threshold = "30s"  # how long output must stay quiet before a card fires
 
 [quiet_hours]           # suppress cards during these local hours (optional)
@@ -141,6 +185,24 @@ All-time: 2 h 8 min across 71 waits.
 
 (The all-time line appears once you have history beyond today.)
 
+## Releasing
+
+Releases are cut by [GoReleaser](https://goreleaser.com). Pushing a `v*` tag
+triggers `.github/workflows/release.yml`, which cross-compiles binaries
+(macOS / Linux / Windows, amd64 & arm64), builds archives + checksums, and
+publishes a GitHub Release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Dry-run the build locally without publishing (requires `goreleaser`):
+
+```bash
+goreleaser release --snapshot --clean   # artifacts land in ./dist
+```
+
 ## License
 
-MIT
+MIT — see [`LICENSE`](./LICENSE).

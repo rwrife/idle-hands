@@ -12,9 +12,12 @@ package deck
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -159,4 +162,155 @@ func sortedKeys(m map[string]Deck) []string {
 	}
 	sort.Strings(ks)
 	return ks
+}
+
+// Source records where a resolved deck came from, so `deck` list output can
+// label a user deck and flag when it shadows a built-in of the same name.
+type Source int
+
+const (
+	// SourceBuiltin is a deck embedded in the binary.
+	SourceBuiltin Source = iota
+	// SourceUser is a deck loaded from ~/.idle-hands/decks/*.toml.
+	SourceUser
+)
+
+// String renders a Source for list/preview output.
+func (s Source) String() string {
+	switch s {
+	case SourceUser:
+		return "user"
+	default:
+		return "built-in"
+	}
+}
+
+// Entry is one deck in the resolved catalog: the deck itself, where it came
+// from, and (for a user deck) whether it overrides a built-in of the same name.
+type Entry struct {
+	Deck   Deck
+	Source Source
+	// Shadows is true when this is a user deck whose name also exists as a
+	// built-in; the user deck wins, but the list can say so.
+	Shadows bool
+}
+
+// LoadDir reads and parses every *.toml deck directly under dir on the real
+// filesystem, keyed by each deck's declared Name. A missing dir is not an error
+// — it returns an empty map, so a fresh install with no ~/.idle-hands/decks
+// just works. A present-but-malformed deck file is a real error the user should
+// see and fix. dir may be empty, which is treated as "no user decks".
+func LoadDir(dir string) (map[string]Deck, error) {
+	if strings.TrimSpace(dir) == "" {
+		return map[string]Deck{}, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return map[string]Deck{}, nil
+		}
+		return nil, fmt.Errorf("read user deck dir %q: %w", dir, err)
+	}
+	out := make(map[string]Deck)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+			continue
+		}
+		full := filepathJoin(dir, e.Name())
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return nil, fmt.Errorf("read user deck %q: %w", full, err)
+		}
+		d, err := Parse(data)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", full, err)
+		}
+		if _, dup := out[d.Name]; dup {
+			return nil, fmt.Errorf("duplicate user deck name %q (in %s)", d.Name, full)
+		}
+		out[d.Name] = d
+	}
+	return out, nil
+}
+
+// Resolve returns the deck named name, preferring a user deck in userDir over a
+// built-in of the same name (so a user can override a shipped deck). It also
+// reports the Source so callers can tell the user which one they got. An empty
+// userDir means "built-ins only". An unknown name is an error listing the names
+// that are available.
+func Resolve(name, userDir string) (Deck, Source, error) {
+	user, err := LoadDir(userDir)
+	if err != nil {
+		return Deck{}, SourceUser, err
+	}
+	if d, ok := user[name]; ok {
+		return d, SourceUser, nil
+	}
+	d, err := Builtin(name)
+	if err != nil {
+		// Re-build a friendlier "available" list that includes user decks.
+		return Deck{}, SourceBuiltin, fmt.Errorf("no deck %q (have: %s)", name, strings.Join(availableNames(user), ", "))
+	}
+	return d, SourceBuiltin, nil
+}
+
+// Catalog returns every available deck — built-ins plus user decks in userDir —
+// sorted by name, with user decks overriding built-ins of the same name. It is
+// what the `deck` list command renders. A malformed user deck is an error.
+func Catalog(userDir string) ([]Entry, error) {
+	builtins, err := Builtins()
+	if err != nil {
+		return nil, err
+	}
+	user, err := LoadDir(userDir)
+	if err != nil {
+		return nil, err
+	}
+
+	byName := make(map[string]Entry, len(builtins)+len(user))
+	for name, d := range builtins {
+		byName[name] = Entry{Deck: d, Source: SourceBuiltin}
+	}
+	for name, d := range user {
+		_, shadows := builtins[name]
+		byName[name] = Entry{Deck: d, Source: SourceUser, Shadows: shadows}
+	}
+
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]Entry, 0, len(names))
+	for _, name := range names {
+		out = append(out, byName[name])
+	}
+	return out, nil
+}
+
+// availableNames returns the sorted union of user deck names and built-in deck
+// names, for friendly "have: …" error messages.
+func availableNames(user map[string]Deck) []string {
+	set := make(map[string]struct{})
+	for _, n := range BuiltinNames() {
+		set[n] = struct{}{}
+	}
+	for n := range user {
+		set[n] = struct{}{}
+	}
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// filepathJoin joins a directory and filename with the OS separator. It is a
+// thin wrapper kept here so this file's only filesystem-path dependency is
+// obvious; user-deck paths are real OS paths (unlike the embedded FS, which
+// uses path.Join with forward slashes).
+func filepathJoin(dir, name string) string {
+	return filepath.Join(dir, name)
 }

@@ -198,3 +198,19 @@ func at(t *testing.T, hhmm string) time.Time {
 	}
 	return time.Date(2026, 6, 29, int(c)/60, int(c)%60, 0, 0, time.Local)
 }
+
+// TestDecksDir builds the user-deck directory under the home dir. It uses
+// $HOME (honored by os.UserHomeDir on Linux/macOS) so the path is predictable.
+func TestDecksDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := DecksDir()
+	if err != nil {
+		t.Fatalf("DecksDir error: %v", err)
+	}
+	want := filepath.Join(home, ".idle-hands", "decks")
+	if got != want {
+		t.Errorf("DecksDir() = %q, want %q", got, want)
+	}
+}

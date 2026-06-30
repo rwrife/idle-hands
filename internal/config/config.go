@@ -37,8 +37,9 @@ const DefaultBusyThreshold = 20 * time.Second
 
 // dirName / fileName are the on-disk locations under the user's home directory.
 const (
-	dirName  = ".idle-hands"
-	fileName = "config.toml"
+	dirName   = ".idle-hands"
+	fileName  = "config.toml"
+	decksName = "decks"
 )
 
 // Config is the fully-resolved idle-hands configuration. Construct it via Load
@@ -99,6 +100,17 @@ func Path() (string, error) {
 		return "", fmt.Errorf("locate home directory: %w", err)
 	}
 	return filepath.Join(home, dirName, fileName), nil
+}
+
+// DecksDir returns the absolute path to the user deck directory
+// (~/.idle-hands/decks) using the OS user home directory. It is where user
+// decks (*.toml) are loaded from; the directory need not exist.
+func DecksDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate home directory: %w", err)
+	}
+	return filepath.Join(home, dirName, decksName), nil
 }
 
 // Load reads and resolves the config file at the user's default path. A missing
