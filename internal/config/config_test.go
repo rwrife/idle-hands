@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -199,11 +200,16 @@ func at(t *testing.T, hhmm string) time.Time {
 	return time.Date(2026, 6, 29, int(c)/60, int(c)%60, 0, 0, time.Local)
 }
 
-// TestDecksDir builds the user-deck directory under the home dir. It uses
-// $HOME (honored by os.UserHomeDir on Linux/macOS) so the path is predictable.
+// TestDecksDir builds the user-deck directory under the home dir. It sets the
+// home-directory env var that os.UserHomeDir reads on this platform
+// (USERPROFILE on Windows, HOME elsewhere) so the path is predictable.
 func TestDecksDir(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
 
 	got, err := DecksDir()
 	if err != nil {
