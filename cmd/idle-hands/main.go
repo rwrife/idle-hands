@@ -1,16 +1,24 @@
 // Command idle-hands is a pocket-sized break coach for the dead time while your
 // AI coding agent thinks. It wires up subcommand routing, a `version` command,
-// and the `watch` wrapper that runs your agent transparently, detects its
-// BUSY/IDLE windows, and shows one micro-action card while it's thinking.
+// the `watch` wrapper that runs your agent transparently, detects its
+// BUSY/IDLE windows, and shows one micro-action card while it's thinking, and a
+// `stats` command that reports the idle time you've reclaimed. The deck, busy
+// threshold, and quiet hours are read from ~/.idle-hands/config.toml.
 package main
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/rwrife/idle-hands/internal/version"
 )
+
+// stdout is the writer for command output (as opposed to notices, which go to
+// os.Stderr). It is a package var so tests can capture `stats` output without a
+// real terminal.
+var stdout io.Writer = os.Stdout
 
 const usage = `idle-hands 🙌 — one good micro-win for the dead time while your agent thinks.
 
@@ -20,13 +28,21 @@ Usage:
 Commands:
   watch -- <cmd> [args...]   Run <cmd>, passing I/O straight through, and show
                              one micro-action card while it's "thinking".
-  stats                      Show reclaimed idle time. (coming in M5)
+  stats                      Show reclaimed idle time ("reclaimed X min today").
   version                    Print the build version.
   help                       Show this help.
+
+Config (optional): ~/.idle-hands/config.toml
+  deck = "move"            # move | duck | tidy
+  busy_threshold = "20s"  # how long quiet before a card fires
+  [quiet_hours]           # suppress cards during these local hours
+  start = "22:00"
+  end   = "07:00"
 
 Examples:
   idle-hands watch -- echo hi
   idle-hands watch -- claude
+  idle-hands stats
   idle-hands version
 `
 
@@ -60,8 +76,11 @@ func run(args []string) int {
 		return code
 
 	case "stats":
-		fmt.Fprintln(os.Stderr, "idle-hands: `stats` is not implemented yet (coming in M5).")
-		return 1
+		code, err := cmdStats(rest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
+		}
+		return code
 
 	default:
 		fmt.Fprintf(os.Stderr, "idle-hands: unknown command %q\n\n", cmd)

@@ -39,19 +39,21 @@ returns your focus to the task.
 ```bash
 go install github.com/rwrife/idle-hands/cmd/idle-hands@latest
 idle-hands watch -- <your-agent-command>
-idle-hands stats        # "reclaimed 14 min of spinner-staring today"
+idle-hands stats        # "reclaimed 14 min across 9 waits today"
 ```
 
-> **Today (M4):** `watch` runs your command under a real pseudo-terminal,
+> **Today (M5):** `watch` runs your command under a real pseudo-terminal,
 > passes I/O straight through (interactive agent TUIs render exactly as they
 > would unwrapped, exit code preserved), and feeds the tapped output to the
-> **BUSY/IDLE detector**. When output goes quiet for the busy threshold
-> (default 20s) — ignoring spinner/"thinking" repaints so a chatty spinner
-> can't fool it — `idle-hands` renders **exactly one styled card** from the
-> built-in `move` deck and clears it the instant real output resumes
-> ("👋 agent's back — reclaimed Ns"). One card per busy window, no repeats
-> back-to-back. Cards print on stderr so the agent's own output stays clean.
-> Choosing the deck via config arrives in M5.
+> **BUSY/IDLE detector**. When output goes quiet for the busy threshold —
+> ignoring spinner/"thinking" repaints so a chatty spinner can't fool it —
+> `idle-hands` renders **exactly one styled card** and clears it the instant
+> real output resumes ("👋 agent's back — reclaimed Ns"). One card per busy
+> window, no repeats back-to-back. Cards print on stderr so the agent's own
+> output stays clean. **New in M5:** the deck, busy threshold, and quiet hours
+> are configurable via `~/.idle-hands/config.toml`, every reclaimed window is
+> tallied to `~/.idle-hands/state.json`, and `idle-hands stats` reports your
+> reclaimed time for the day.
 
 ## Build from source
 
@@ -62,6 +64,7 @@ git clone https://github.com/rwrife/idle-hands
 cd idle-hands
 go build ./cmd/idle-hands       # produces ./idle-hands
 ./idle-hands watch -- echo hi   # prints: hi
+./idle-hands stats              # reclaimed-time summary
 ./idle-hands version
 
 go test ./...                   # run the test suite
@@ -103,8 +106,40 @@ embedded in the binary (no config needed):
 - **tidy** — close one stray tab / triage one stale TODO
 
 The same card is never shown twice in a row, and each busy window gets exactly
-one. Picking a non-default deck via config, and bringing your own under
-`~/.idle-hands/decks/*.toml`, arrive in M5/M6.
+one. Pick a non-default deck in config (below). Bringing your own under
+`~/.idle-hands/decks/*.toml` arrives in M6.
+
+## Config
+
+All optional — with no config file you get the defaults above (the `move` deck,
+a 20s threshold, no quiet hours). Drop a `~/.idle-hands/config.toml` to tune it;
+changes take effect on the next run:
+
+```toml
+deck = "duck"            # which deck to show: move | duck | tidy
+busy_threshold = "30s"  # how long output must stay quiet before a card fires
+
+[quiet_hours]           # suppress cards during these local hours (optional)
+start = "22:00"         # cards are withheld 22:00 → 07:00; the agent is still
+end   = "07:00"         # wrapped and reclaimed time is still tallied
+```
+
+Quiet-hours ranges may wrap past midnight (e.g. `22:00`→`07:00`). An unknown key
+or a malformed value is reported loudly so a typo never silently does nothing.
+
+## Stats
+
+Every completed busy window is tallied to `~/.idle-hands/state.json` (a plain
+JSON file — no DB, no telemetry, 100% local). `idle-hands stats` prints the
+day's reclaimed time:
+
+```bash
+$ idle-hands stats
+idle-hands 🙌 — reclaimed 14 min across 9 waits today.
+All-time: 2 h 8 min across 71 waits.
+```
+
+(The all-time line appears once you have history beyond today.)
 
 ## License
 
