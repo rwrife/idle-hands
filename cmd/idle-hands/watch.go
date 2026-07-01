@@ -135,10 +135,18 @@ func cmdWatch(args []string) (int, error) {
 }
 
 // newCardRenderer loads the named deck and returns a card.Renderer writing to
-// stderr. If the deck can't be loaded it returns nil, and handleState falls
+// stderr. It resolves a user deck under ~/.idle-hands/decks over a built-in of
+// the same name (matching `deck` preview), so a user's own deck actually drives
+// the cards. If the deck can't be loaded it returns nil, and handleState falls
 // back to plain one-line notices so watch still works.
 func newCardRenderer(name string) *card.Renderer {
-	d, err := deck.Builtin(name)
+	userDir, err := config.DecksDir()
+	if err != nil {
+		// Can't locate the home dir; user decks are unavailable but built-ins
+		// still are. Resolve against an empty dir (built-ins only).
+		userDir = ""
+	}
+	d, _, err := deck.Resolve(name, userDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "idle-hands: deck %q unavailable (%v); using plain notices\n", name, err)
 		return nil

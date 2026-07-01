@@ -1,0 +1,90 @@
+# GoReleaser config for idle-hands.
+# Builds cross-compiled, statically-linked binaries for macOS, Linux, and
+# Windows and publishes them as a GitHub Release whenever a v* tag is pushed.
+#
+# Try it locally without publishing:
+#   goreleaser release --snapshot --clean
+#
+# Docs: https://goreleaser.com
+version: 2
+
+project_name: idle-hands
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: idle-hands
+    main: ./cmd/idle-hands
+    binary: idle-hands
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # No 32-bit Windows-on-ARM combo worth shipping for a dev tool.
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/rwrife/idle-hands/internal/version.Version={{ .Version }}
+      - -X github.com/rwrife/idle-hands/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/rwrife/idle-hands/internal/version.Date={{ .Date }}
+
+archives:
+  - id: idle-hands
+    formats: [tar.gz]
+    # Use zip on Windows so double-click extraction just works.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - PLAN.md
+      - LICENSE*
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  draft: false
+  prerelease: auto
+  name_template: "idle-hands {{ .Tag }}"
+  footer: |
+    ## Install
+
+    Download the archive for your platform above, extract `idle-hands`, and put
+    it on your `PATH`. Or from source:
+
+    ```bash
+    go install github.com/rwrife/idle-hands/cmd/idle-hands@{{ .Tag }}
+    ```
+
+    Then wrap your agent:
+
+    ```bash
+    idle-hands watch -- <your-agent-command>
+    ```

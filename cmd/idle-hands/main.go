@@ -28,20 +28,27 @@ Usage:
 Commands:
   watch -- <cmd> [args...]   Run <cmd>, passing I/O straight through, and show
                              one micro-action card while it's "thinking".
+  deck [name]                List decks, or preview one deck's cards.
   stats                      Show reclaimed idle time ("reclaimed X min today").
   version                    Print the build version.
   help                       Show this help.
 
 Config (optional): ~/.idle-hands/config.toml
-  deck = "move"            # move | duck | tidy
+  deck = "move"            # move | duck | tidy | <your-deck>
   busy_threshold = "20s"  # how long quiet before a card fires
   [quiet_hours]           # suppress cards during these local hours
   start = "22:00"
   end   = "07:00"
 
+User decks (optional): ~/.idle-hands/decks/*.toml
+  Drop your own deck files there; they're listed by the deck command and
+  selectable in config (a user deck overrides a built-in of the same name).
+
 Examples:
   idle-hands watch -- echo hi
   idle-hands watch -- claude
+  idle-hands deck
+  idle-hands deck duck
   idle-hands stats
   idle-hands version
 `
@@ -70,6 +77,13 @@ func run(args []string) int {
 
 	case "watch":
 		code, err := cmdWatch(rest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
+		}
+		return code
+
+	case "deck", "decks":
+		code, err := cmdDeck(rest)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
 		}

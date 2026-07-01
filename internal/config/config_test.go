@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -197,4 +198,25 @@ func at(t *testing.T, hhmm string) time.Time {
 		t.Fatalf("ParseClock(%q): %v", hhmm, err)
 	}
 	return time.Date(2026, 6, 29, int(c)/60, int(c)%60, 0, 0, time.Local)
+}
+
+// TestDecksDir builds the user-deck directory under the home dir. It sets the
+// home-directory env var that os.UserHomeDir reads on this platform
+// (USERPROFILE on Windows, HOME elsewhere) so the path is predictable.
+func TestDecksDir(t *testing.T) {
+	home := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
+
+	got, err := DecksDir()
+	if err != nil {
+		t.Fatalf("DecksDir error: %v", err)
+	}
+	want := filepath.Join(home, ".idle-hands", "decks")
+	if got != want {
+		t.Errorf("DecksDir() = %q, want %q", got, want)
+	}
 }
