@@ -6,7 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rwrife/idle-hands/internal/config"
 )
+
+// noSRS is the zero SRSConfig used by deck-command tests that don't exercise
+// the flashcard deck (no card source configured).
+var noSRS = config.SRSConfig{}
 
 // writeUserDeck writes a deck TOML into dir for the deck-command tests.
 func writeUserDeck(t *testing.T, dir, file, contents string) {
@@ -20,7 +26,7 @@ func writeUserDeck(t *testing.T, dir, file, contents string) {
 // deck directory.
 func TestRunDeckListBuiltins(t *testing.T) {
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), nil)
+	code, err := runDeck(&buf, t.TempDir(), noSRS, nil)
 	if err != nil {
 		t.Fatalf("runDeck list: %v", err)
 	}
@@ -46,7 +52,7 @@ title = "Push-up"
 text = "Drop and give me five."`)
 
 	var buf bytes.Buffer
-	if _, err := runDeck(&buf, dir, nil); err != nil {
+	if _, err := runDeck(&buf, dir, noSRS, nil); err != nil {
 		t.Fatalf("runDeck list: %v", err)
 	}
 	out := buf.String()
@@ -61,7 +67,7 @@ text = "Drop and give me five."`)
 // TestRunDeckPreview prints every card of the named deck in order.
 func TestRunDeckPreview(t *testing.T) {
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), []string{"duck"})
+	code, err := runDeck(&buf, t.TempDir(), noSRS, []string{"duck"})
 	if err != nil {
 		t.Fatalf("runDeck preview: %v", err)
 	}
@@ -88,7 +94,7 @@ title = "One thing"
 text = "Name the single next action."`)
 
 	var buf bytes.Buffer
-	if _, err := runDeck(&buf, dir, []string{"focus"}); err != nil {
+	if _, err := runDeck(&buf, dir, noSRS, []string{"focus"}); err != nil {
 		t.Fatalf("runDeck preview user: %v", err)
 	}
 	out := buf.String()
@@ -104,7 +110,7 @@ text = "Name the single next action."`)
 // deck name.
 func TestRunDeckUnknownErrors(t *testing.T) {
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), []string{"nope"})
+	code, err := runDeck(&buf, t.TempDir(), noSRS, []string{"nope"})
 	if err == nil {
 		t.Fatal("runDeck(nope) expected error, got nil")
 	}
@@ -116,11 +122,87 @@ func TestRunDeckUnknownErrors(t *testing.T) {
 // TestRunDeckTooManyArgs is a usage error.
 func TestRunDeckTooManyArgs(t *testing.T) {
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), []string{"a", "b"})
+	code, err := runDeck(&buf, t.TempDir(), noSRS, []string{"a", "b"})
 	if err == nil {
 		t.Fatal("runDeck(a b) expected error, got nil")
 	}
 	if code != 2 {
 		t.Errorf("code = %d, want 2 (usage)", code)
+	}
+}
+
+// writeSRSSource writes a Markdown Q/A card file into dir and returns its path,
+// for the flashcard-deck command tests.
+func writeSRSSource(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "cards.md")
+	body := "Q: Capital of France?\nA: Paris\nQ: 2 + 2?\nA: Four\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write srs source: %v", err)
+	}
+	return path
+}
+
+// TestRunDeckListIncludesSRS shows the flashcard deck in the listing when a
+// card source is configured, labeled [srs] with its card count.
+func TestRunDeckListIncludesSRS(t *testing.T) {
+	dir := t.TempDir()
+	srsCfg := config.SRSConfig{Source: writeSRSSource(t, dir)}
+
+	var buf bytes.Buffer
+	if _, err := runDeck(&buf, t.TempDir(), srsCfg, nil); err != nil {
+		t.Fatalf("runDeck list: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "[srs]") {
+		t.Errorf("listing missing the srs deck, got:\n%s", out)
+	}
+	if !strings.Contains(out, "2 cards") {
+		t.Errorf("listing missing srs card count, got:\n%s", out)
+	}
+}
+
+// TestRunDeckListSRSAbsentWhenUnconfigured confirms the srs row is omitted when
+// no card source is set (so the listing doesn't advertise an empty deck).
+func TestRunDeckListSRSAbsentWhenUnconfigured(t *testing.T) {
+	var buf bytes.Buffer
+	if _, err := runDeck(&buf, t.TempDir(), noSRS, nil); err != nil {
+		t.Fatalf("runDeck list: %v", err)
+	}
+	if strings.Contains(buf.String(), "[srs]") {
+		t.Errorf("unconfigured srs deck should not appear, got:\n%s", buf.String())
+	}
+}
+
+// TestRunDeckPreviewSRS previews the flashcard deck by loading the configured
+// source, printing the fronts and backs.
+func TestRunDeckPreviewSRS(t *testing.T) {
+	dir := t.TempDir()
+	srsCfg := config.SRSConfig{Source: writeSRSSource(t, dir)}
+
+	var buf bytes.Buffer
+	code, err := runDeck(&buf, t.TempDir(), srsCfg, []string{"srs"})
+	if err != nil {
+		t.Fatalf("runDeck preview srs: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("code = %d, want 0", code)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Capital of France?") || !strings.Contains(out, "Paris") {
+		t.Errorf("srs preview missing cards, got:\n%s", out)
+	}
+}
+
+// TestRunDeckPreviewSRSUnconfigured errors clearly when the srs deck is
+// previewed but no card source is configured.
+func TestRunDeckPreviewSRSUnconfigured(t *testing.T) {
+	var buf bytes.Buffer
+	code, err := runDeck(&buf, t.TempDir(), noSRS, []string{"srs"})
+	if err == nil {
+		t.Fatal("runDeck(srs) with no source expected error, got nil")
+	}
+	if code == 0 {
+		t.Error("code = 0, want non-zero")
 	}
 }

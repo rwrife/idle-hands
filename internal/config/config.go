@@ -35,6 +35,16 @@ const DefaultDeck = "move"
 // a dependency cycle and to keep config self-describing).
 const DefaultBusyThreshold = 20 * time.Second
 
+// DefaultSRSReveal is how long the flashcard deck shows the question before
+// revealing the answer when config sets no srs_reveal. Long enough to actually
+// try to recall, short enough to still finish inside a typical think window.
+const DefaultSRSReveal = 6 * time.Second
+
+// DefaultSRSSpacing is how many recently-shown flashcards to deprioritize when
+// config sets no srs_spacing, so the same card doesn't resurface for a few
+// waits. It only applies to the "srs" deck.
+const DefaultSRSSpacing = 3
+
 // dirName / fileName are the on-disk locations under the user's home directory.
 const (
 	dirName   = ".idle-hands"
@@ -51,6 +61,24 @@ type Config struct {
 	BusyThreshold time.Duration
 	// Quiet is the daily window during which cards are suppressed.
 	Quiet QuietHours
+	// SRS holds the flashcard-deck settings, used only when Deck == "srs".
+	SRS SRSConfig
+}
+
+// SRSConfig tunes the spaced-repetition ("srs") flashcard deck: where the cards
+// come from, how long to show the question before revealing the answer, and how
+// many recently-seen cards to hold back. It is only consulted when Deck is
+// "srs"; for any other deck these fields are ignored (and Source may be empty).
+type SRSConfig struct {
+	// Source is the path to the card file (Markdown Q/A or Anki text export).
+	// Required when Deck == "srs"; watch surfaces a clear error if it's unset
+	// or unreadable.
+	Source string
+	// Reveal is the front-only delay before the answer is shown. <= 0 is
+	// treated as DefaultSRSReveal by consumers.
+	Reveal time.Duration
+	// Spacing is how many recently-shown cards to deprioritize.
+	Spacing int
 }
 
 // QuietHours is a daily clock-time range during which idle-hands shows no
@@ -75,6 +103,9 @@ type fileConfig struct {
 	Deck          string         `toml:"deck"`
 	BusyThreshold string         `toml:"busy_threshold"`
 	Quiet         fileQuietHours `toml:"quiet_hours"`
+	SRSSource     string         `toml:"srs_source"`
+	SRSReveal     string         `toml:"srs_reveal"`
+	SRSSpacing    *int           `toml:"srs_spacing"`
 }
 
 type fileQuietHours struct {
@@ -83,12 +114,17 @@ type fileQuietHours struct {
 }
 
 // Default returns the configuration used when no config file exists: the M4
-// behavior (move deck, 20s threshold, no quiet hours).
+// behavior (move deck, 20s threshold, no quiet hours). SRS defaults are filled
+// in too, though they only matter once the user selects deck = "srs".
 func Default() Config {
 	return Config{
 		Deck:          DefaultDeck,
 		BusyThreshold: DefaultBusyThreshold,
 		Quiet:         QuietHours{},
+		SRS: SRSConfig{
+			Reveal:  DefaultSRSReveal,
+			Spacing: DefaultSRSSpacing,
+		},
 	}
 }
 
@@ -181,7 +217,62 @@ func Parse(data []byte) (Config, error) {
 	}
 	cfg.Quiet = quiet
 
+	if err := applySRS(&cfg, fc); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
+}
+
+// applySRS resolves the flashcard-deck settings onto cfg. The source path is
+// taken verbatim (existence is validated at load time by the srs loader, not
+// here, so a config with deck != "srs" isn't rejected for a missing card file).
+// A blank srs_reveal keeps the default; a present one must be a positive
+// duration. A negative srs_spacing is rejected; 0 is allowed (means "only avoid
+// immediate repeats").
+func applySRS(cfg *Config, fc fileConfig) error {
+	if v := strings.TrimSpace(fc.SRSSource); v != "" {
+		expanded, err := expandHome(v)
+		if err != nil {
+			return fmt.Errorf("srs_source %q: %w", v, err)
+		}
+		cfg.SRS.Source = expanded
+	}
+	if v := strings.TrimSpace(fc.SRSReveal); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("srs_reveal %q: %w", v, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("srs_reveal must be positive, got %q", v)
+		}
+		cfg.SRS.Reveal = d
+	}
+	if fc.SRSSpacing != nil {
+		if *fc.SRSSpacing < 0 {
+			return fmt.Errorf("srs_spacing must be >= 0, got %d", *fc.SRSSpacing)
+		}
+		cfg.SRS.Spacing = *fc.SRSSpacing
+	}
+	return nil
+}
+
+// expandHome expands a leading "~/" (or a bare "~") in a path to the user's home
+// directory, so config values like srs_source = "~/.idle-hands/cards.md" work
+// the way users expect. Other paths (absolute or relative) are returned as-is.
+// A "~user" form is not supported and is left untouched.
+func expandHome(p string) (string, error) {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if p == "~" {
+			return home, nil
+		}
+		return filepath.Join(home, p[2:]), nil
+	}
+	return p, nil
 }
 
 // parseQuietHours turns the string "HH:MM" pair into a QuietHours. Both empty
