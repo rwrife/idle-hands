@@ -26,9 +26,12 @@ Usage:
   idle-hands <command> [args...]
 
 Commands:
-  watch -- <cmd> [args...]   Run <cmd>, passing I/O straight through, and show
+  watch [--preset <name>] -- <cmd> [args...]
+                             Run <cmd>, passing I/O straight through, and show
                              one micro-action card while it's "thinking".
+                             --preset tunes detection for a known agent.
   deck [name]                List decks, or preview one deck's cards.
+  preset [name]              List agent presets, or show one preset's tuning.
   stats                      Show reclaimed idle time ("reclaimed X min today").
   version                    Print the build version.
   help                       Show this help.
@@ -49,12 +52,21 @@ Flashcards (optional): deck = "srs"
   srs_reveal = "6s"                       # show the question, then reveal the answer
   Shows one flashcard per wait (question first), never blocking your agent.
 
+Agent presets (optional): --preset <name>
+  claude | aider | cursor | codex | gh-copilot
+  Pre-tunes the busy threshold and "thinking" keyword hints for that agent.
+  With no --preset, generic quiet-timeout detection is used. An explicit
+  busy_threshold in config still wins over a preset.
+
 Examples:
   idle-hands watch -- echo hi
   idle-hands watch -- claude
+  idle-hands watch --preset claude -- claude
   idle-hands deck
   idle-hands deck duck
   idle-hands deck srs
+  idle-hands preset
+  idle-hands preset claude
   idle-hands stats
   idle-hands version
 `
@@ -90,6 +102,13 @@ func run(args []string) int {
 
 	case "deck", "decks":
 		code, err := cmdDeck(rest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
+		}
+		return code
+
+	case "preset", "presets":
+		code, err := cmdPreset(rest)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
 		}

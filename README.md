@@ -52,7 +52,9 @@ Then wrap your agent and get on with it:
 
 ```bash
 idle-hands watch -- <your-agent-command>   # e.g. claude, aider, codex
+idle-hands watch --preset claude -- claude # tune detection for a known agent
 idle-hands deck                            # see the available decks
+idle-hands preset                          # see the agent presets
 idle-hands stats                           # "reclaimed 14 min across 9 waits today"
 ```
 
@@ -67,7 +69,9 @@ styled card** and clears it the instant real output resumes ("👋 agent's back 
 reclaimed Ns"). One card per busy window, never the same one twice in a row.
 Cards print on stderr so the agent's own output stays clean. The deck, busy
 threshold, and quiet hours come from `~/.idle-hands/config.toml`; every reclaimed
-window is tallied to `~/.idle-hands/state.json` for `idle-hands stats`.
+window is tallied to `~/.idle-hands/state.json` for `idle-hands stats`. Pass
+`--preset <agent>` to start from detection tuning matched to a known agent (see
+[Agent presets](#agent-presets)).
 
 ## Build from source
 
@@ -152,6 +156,43 @@ text = "Is this the most important thing, or just the loudest?"
 
 Select it in config (`deck = "focus"`). A malformed deck file is reported loudly
 rather than silently skipped, so a typo never just vanishes.
+
+## Agent presets
+
+Different agents "think" differently — Claude Code can reason for 20–30s behind
+an `esc to interrupt` spinner, while a `gh copilot suggest` call is over in
+seconds. Instead of hand-tuning `busy_threshold` and keyword hints per agent,
+point `watch` at a **preset**:
+
+```bash
+idle-hands watch --preset claude -- claude
+idle-hands watch --preset aider  -- aider
+idle-hands watch --preset gh-copilot -- gh copilot suggest
+```
+
+Each preset pre-sets a busy threshold tuned for that agent and adds a few
+agent-specific "thinking" keyword hints on top of the generic ones, so a chatty
+spinner doesn't fool the detector. Shipped presets:
+
+- **claude** — Claude Code (longer reasoning windows)
+- **aider** — Aider (streams fairly promptly)
+- **cursor** — Cursor agent
+- **codex** — Codex CLI
+- **gh-copilot** — `gh copilot suggest`/`explain` (short, snappy)
+
+List them or inspect one before you commit:
+
+```bash
+$ idle-hands preset            # list every preset + its busy threshold
+$ idle-hands preset claude     # show a preset's threshold and keyword hints
+```
+
+With **no** `--preset`, `idle-hands` uses its generic quiet-timeout detection
+(unchanged). A preset is a convenience, not a requirement — and an explicit
+`busy_threshold` in `~/.idle-hands/config.toml` always wins over a preset's
+suggested threshold, so your config is never silently overridden. (Common
+spellings like `claude-code`, `gh_copilot`, or `copilot` resolve to the right
+preset.)
 
 ### Flashcards (spaced repetition)
 
