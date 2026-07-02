@@ -16,32 +16,64 @@ import (
 	"io"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rwrife/idle-hands/internal/deck"
 )
 
-// Picker chooses cards from a deck, avoiding immediate repeats. It is not safe
-// for concurrent use; the watch loop drives it from one goroutine.
+// Picker chooses cards from a deck, avoiding immediate repeats and — when a
+// spacing window is configured — deprioritizing any card shown in the last few
+// picks. It is not safe for concurrent use; the watch loop drives it from one
+// goroutine.
+//
+// Spacing (issue #7): the default behavior is the M4 rule — never the same card
+// twice in a row. A Picker built with a larger history window additionally
+// avoids every card in that recent window when it can, so a flashcard deck
+// doesn't resurface a card you just saw two waits ago. When the window is as
+// large as (or larger than) the deck, avoidance relaxes gracefully to "just not
+// the immediately previous one" so the picker can never wedge itself.
 type Picker struct {
 	deck deck.Deck
 	rng  *rand.Rand
 	last int // index of the last card returned, or -1 if none yet
+
+	// recent is a ring buffer of the most recently returned indices (most
+	// recent last). Its capacity is the spacing window; len 0 disables spacing
+	// beyond the immediate-repeat guard.
+	recent []int
+	window int
 }
 
-// NewPicker builds a Picker over d. The rng is injectable so tests are
-// deterministic; pass nil for a time-seeded default.
+// NewPicker builds a Picker over d that only avoids immediate repeats. The rng
+// is injectable so tests are deterministic; pass nil for a time-seeded default.
 func NewPicker(d deck.Deck, rng *rand.Rand) *Picker {
+	return NewSpacedPicker(d, rng, 0)
+}
+
+// NewSpacedPicker builds a Picker that additionally deprioritizes the last
+// `window` distinct cards it returned (in addition to never immediately
+// repeating). A window <= 1 behaves exactly like NewPicker. The effective
+// window is capped at len(cards)-1 so at least one card is always eligible.
+func NewSpacedPicker(d deck.Deck, rng *rand.Rand, window int) *Picker {
 	if rng == nil {
 		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
-	return &Picker{deck: d, rng: rng, last: -1}
+	if window < 0 {
+		window = 0
+	}
+	// Cap so we never exclude every card; keep at least one eligible.
+	if n := len(d.Cards); n > 0 && window > n-1 {
+		window = n - 1
+	}
+	return &Picker{deck: d, rng: rng, last: -1, window: window}
 }
 
 // Next returns the next card to show. With two or more cards it never returns
 // the same index twice in a row; with a single card it returns that card every
-// time (there is nothing else to show).
+// time (there is nothing else to show). When a spacing window is set it also
+// avoids the recent window of cards when at least one card outside it exists.
 func (p *Picker) Next() deck.Card {
 	n := len(p.deck.Cards)
 	switch n {
@@ -49,15 +81,79 @@ func (p *Picker) Next() deck.Card {
 		return deck.Card{} // defensively empty; decks are validated non-empty
 	case 1:
 		p.last = 0
+		p.remember(0)
 		return p.deck.Cards[0]
 	}
+	i := p.pick(n)
+	p.last = i
+	p.remember(i)
+	return p.deck.Cards[i]
+}
+
+// pick chooses an index in [0,n) that isn't the immediately previous one and,
+// when possible, isn't in the recent spacing window. It draws at random and
+// rejects excluded indices for a bounded number of tries, then falls back to a
+// deterministic scan so it always terminates even in adversarial rng runs.
+func (p *Picker) pick(n int) int {
+	excluded := p.excludedSet(n)
+	// Try random draws first to preserve the uniform-ish feel of the M4 picker.
+	for tries := 0; tries < 2*n; tries++ {
+		i := p.rng.Intn(n)
+		if !excluded[i] {
+			return i
+		}
+	}
+	// Deterministic fallback: first non-excluded index after a random offset.
+	off := p.rng.Intn(n)
+	for k := 0; k < n; k++ {
+		i := (off + k) % n
+		if !excluded[i] {
+			return i
+		}
+	}
+	// Everything excluded (shouldn't happen given the window cap); just avoid
+	// the immediate repeat.
 	i := p.rng.Intn(n)
 	if i == p.last {
-		// Shift to a neighbor so we never repeat; wraps within [0,n).
 		i = (i + 1) % n
 	}
-	p.last = i
-	return p.deck.Cards[i]
+	return i
+}
+
+// excludedSet marks indices the next pick should avoid: always the immediately
+// previous card, plus every card in the recent spacing window. It guarantees at
+// least one index stays eligible by never marking more than n-1 of them.
+func (p *Picker) excludedSet(n int) []bool {
+	ex := make([]bool, n)
+	marked := 0
+	mark := func(i int) {
+		if i >= 0 && i < n && !ex[i] && marked < n-1 {
+			ex[i] = true
+			marked++
+		}
+	}
+	if p.last >= 0 {
+		mark(p.last)
+	}
+	// Walk the recent window most-recent-first so the freshest cards are the
+	// ones kept out if we run up against the n-1 cap.
+	for k := len(p.recent) - 1; k >= 0; k-- {
+		mark(p.recent[k])
+	}
+	return ex
+}
+
+// remember records index i as the most recent pick, bounded to the spacing
+// window. With a zero window it keeps nothing (the immediate-repeat guard via
+// p.last is enough).
+func (p *Picker) remember(i int) {
+	if p.window <= 0 {
+		return
+	}
+	p.recent = append(p.recent, i)
+	if len(p.recent) > p.window {
+		p.recent = p.recent[len(p.recent)-p.window:]
+	}
 }
 
 // Theme controls card styling. The zero value is unusable; use DefaultTheme.
@@ -94,6 +190,14 @@ func DefaultTheme() Theme {
 // frames to a single io.Writer (typically stderr, so the child's stdout stays
 // clean). It tracks how many terminal lines the last card occupied so it can
 // erase exactly those lines on clear.
+//
+// Reveal mode (issue #7): when a reveal delay is configured the card shows only
+// its front (title) at first and, a beat later, redraws in place with the body
+// ("answer") revealed. The reveal is driven by a timer on its own goroutine and
+// never reads stdin, so it can't block or steal input from the wrapped agent —
+// keystrokes still flow straight to the child. If the agent comes back before
+// the timer fires, OnIdle cancels the pending reveal so a stale answer never
+// pops up after the card was cleared.
 type Renderer struct {
 	w      io.Writer
 	deck   deck.Deck
@@ -103,8 +207,25 @@ type Renderer struct {
 	// width is the target render width for the card box (content + border).
 	width int
 
-	shown    bool // a card is currently on screen for this BUSY window
-	lastLine int  // number of lines the rendered card spanned (for erase)
+	// reveal, when > 0, enables the front-then-answer reveal after this delay.
+	reveal time.Duration
+	// newTimer builds the reveal timer; injectable so tests fire it
+	// deterministically instead of sleeping. nil selects time.AfterFunc.
+	newTimer func(time.Duration, func()) revealTimer
+
+	mu       sync.Mutex // guards the fields below (timer runs on its own goroutine)
+	shown    bool       // a card is currently on screen for this BUSY window
+	lastLine int        // number of lines the rendered card spanned (for erase)
+	cur      deck.Card  // the card currently displayed (for the reveal redraw)
+	curIdle  time.Duration
+	revealed bool        // whether cur's answer is already showing
+	timer    revealTimer // pending reveal timer, if any
+}
+
+// revealTimer is the tiny slice of *time.Timer the renderer needs, so tests can
+// substitute a controllable fake.
+type revealTimer interface {
+	Stop() bool
 }
 
 // Options configure a Renderer.
@@ -117,6 +238,17 @@ type Options struct {
 	Width int
 	// Rand is the source for card selection. nil selects a time-seeded default.
 	Rand *rand.Rand
+	// Spacing is the number of recently-shown cards to deprioritize (in
+	// addition to never immediately repeating). 0 keeps the plain M4 behavior;
+	// the flashcard deck sets it so a card isn't re-shown for a few waits.
+	Spacing int
+	// Reveal, when > 0, shows the card front first and reveals the answer after
+	// this delay (used by the flashcard deck). The reveal never blocks or reads
+	// stdin. 0 renders title and body together as the other decks do.
+	Reveal time.Duration
+	// newTimer overrides the reveal timer constructor for tests. nil selects
+	// time.AfterFunc. Unexported so it isn't part of the public surface.
+	newTimer func(time.Duration, func()) revealTimer
 }
 
 // defaultWidth is the card box width when none is supplied. Comfortable in an
@@ -133,12 +265,24 @@ func NewRenderer(w io.Writer, opts Options) *Renderer {
 	if width <= 0 {
 		width = defaultWidth
 	}
+	newTimer := opts.newTimer
+	if newTimer == nil {
+		newTimer = func(d time.Duration, fn func()) revealTimer {
+			return time.AfterFunc(d, fn)
+		}
+	}
+	reveal := opts.Reveal
+	if reveal < 0 {
+		reveal = 0
+	}
 	return &Renderer{
-		w:      w,
-		deck:   opts.Deck,
-		picker: NewPicker(opts.Deck, opts.Rand),
-		theme:  theme,
-		width:  width,
+		w:        w,
+		deck:     opts.Deck,
+		picker:   NewSpacedPicker(opts.Deck, opts.Rand, opts.Spacing),
+		theme:    theme,
+		width:    width,
+		reveal:   reveal,
+		newTimer: newTimer,
 	}
 }
 
@@ -146,37 +290,92 @@ func NewRenderer(w io.Writer, opts Options) *Renderer {
 // the first call per window wins; any subsequent OnBusy without an intervening
 // OnIdle is a no-op, enforcing the "one card only" rule. idleFor is the quiet
 // span the detector reported (shown in the header).
+//
+// In reveal mode the first frame shows only the front (title); a timer then
+// redraws the same card in place with the answer revealed. The timer runs on
+// its own goroutine and never reads input, so the wrapped agent is never
+// blocked. Without reveal (reveal <= 0, or a card with an empty body) the whole
+// card is drawn at once, exactly as the non-flashcard decks do.
 func (r *Renderer) OnBusy(idleFor time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.shown {
 		return // already showed this window's one card
 	}
 	c := r.picker.Next()
-	frame := r.render(c, idleFor)
-	fmt.Fprint(r.w, "\n"+frame+"\n")
+	r.cur = c
+	r.curIdle = idleFor
+	// Reveal only makes sense when we both have a delay and a body to hide.
+	r.revealed = !(r.reveal > 0 && strings.TrimSpace(c.Text) != "")
+	r.draw()
 	r.shown = true
-	// Count lines so OnIdle can erase precisely. +1 for the leading blank line
+
+	if !r.revealed {
+		// Schedule the non-blocking answer reveal.
+		r.timer = r.newTimer(r.reveal, r.doReveal)
+	}
+}
+
+// doReveal is the timer callback that flips the current card to its answered
+// state and redraws it in place. It is a no-op if the window was already
+// cleared (agent came back) or the card is already revealed, so a late timer
+// can never scribble over a cleared screen.
+func (r *Renderer) doReveal() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.shown || r.revealed {
+		return
+	}
+	fmt.Fprint(r.w, r.clearSeq()) // erase the front-only frame
+	r.revealed = true
+	r.draw()
+}
+
+// draw renders the current card (front-only or revealed per r.revealed), writes
+// it framed by blank lines, and records the line span for a later erase. It
+// assumes r.mu is held.
+func (r *Renderer) draw() {
+	frame := r.render(r.cur, r.curIdle, r.revealed)
+	fmt.Fprint(r.w, "\n"+frame+"\n")
+	// Count lines so a clear can erase precisely. +1 for the leading blank line
 	// we emitted, +1 for the trailing newline's blank.
 	r.lastLine = strings.Count(frame, "\n") + 1
 }
 
-// OnIdle is called when the detector returns to IDLE. It clears the on-screen
-// card (best-effort cursor-up + line-erase) and prints the "agent's back" line
-// with the reclaimed span. It resets the latch so the next BUSY window shows a
-// fresh card.
+// OnIdle is called when the detector returns to IDLE. It cancels any pending
+// reveal, clears the on-screen card (best-effort cursor-up + line-erase) and
+// prints the "agent's back" line with the reclaimed span. It resets the latch
+// so the next BUSY window shows a fresh card.
 func (r *Renderer) OnIdle(reclaimed time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.timer != nil {
+		r.timer.Stop() // don't let a pending reveal fire after we clear
+		r.timer = nil
+	}
 	if r.shown {
 		fmt.Fprint(r.w, r.clearSeq())
 	}
 	fmt.Fprintf(r.w, "  %s agent's back — reclaimed %s\n", "👋", reclaimed.Round(time.Second))
 	r.shown = false
+	r.revealed = false
 	r.lastLine = 0
 }
 
 // Shown reports whether a card is currently displayed (a card has been rendered
 // for the current BUSY window and not yet cleared).
-func (r *Renderer) Shown() bool { return r.shown }
+func (r *Renderer) Shown() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.shown
+}
 
 // render produces the styled card string (without surrounding blank lines).
+//
+// When revealed is false (reveal mode, answer not yet shown) the body is
+// replaced by a muted "…answer in a moment" line so the card is a genuine
+// question prompt; when true (or in the non-reveal decks) the real body is
+// shown. The footer likewise reflects whether this is a flashcard.
 //
 // Width accounting: r.width is the total box width (border + padding +
 // content). The border draws 1 column each side and the theme adds 2 columns
@@ -184,7 +383,7 @@ func (r *Renderer) Shown() bool { return r.shown }
 // r.width-6. We wrap the body to exactly that and let the bordered box size
 // itself to the content, which keeps the right edge flush and the text from
 // wrapping a word early.
-func (r *Renderer) render(c deck.Card, idleFor time.Duration) string {
+func (r *Renderer) render(c deck.Card, idleFor time.Duration, revealed bool) string {
 	contentWidth := r.width - 6 // 2 border cols + 4 padding cols
 	if contentWidth < 12 {
 		contentWidth = 12
@@ -198,9 +397,24 @@ func (r *Renderer) render(c deck.Card, idleFor time.Duration) string {
 	}
 	title := r.theme.title.Width(contentWidth).Render(emoji + c.Title)
 
-	body := r.theme.body.Width(contentWidth).Render(c.Text)
+	// In reveal mode the body is withheld until the timer fires; show a gentle
+	// placeholder so the card reads as a question, not a truncated answer.
+	bodyText := c.Text
+	revealMode := r.reveal > 0 && strings.TrimSpace(c.Text) != ""
+	if revealMode && !revealed {
+		bodyText = fmt.Sprintf("…answer in %s (no keypress needed)", r.reveal.Round(time.Second))
+	}
+	body := r.theme.body.Width(contentWidth).Render(bodyText)
 
-	footer := r.theme.footer.Render("one card · idle-hands")
+	footerText := "one card · idle-hands"
+	if revealMode {
+		if revealed {
+			footerText = "flashcard · answer · idle-hands"
+		} else {
+			footerText = "flashcard · recall it · idle-hands"
+		}
+	}
+	footer := r.theme.footer.Render(footerText)
 
 	content := strings.Join([]string{header, "", title, body, "", footer}, "\n")
 	// Fix the box to the full width so every card is the same size regardless

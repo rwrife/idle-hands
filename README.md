@@ -153,6 +153,43 @@ text = "Is this the most important thing, or just the loudest?"
 Select it in config (`deck = "focus"`). A malformed deck file is reported loudly
 rather than silently skipped, so a typo never just vanishes.
 
+### Flashcards (spaced repetition)
+
+Turn the wait into actual learning. Point the built-in **srs** deck at your own
+flashcards and each busy window shows one card — the **question first**, then the
+**answer** a beat later. Recently-shown cards are held back so you don't see the
+same one twice in a few waits, and the reveal is purely timed: it never reads the
+keyboard, so your agent keeps getting your keystrokes untouched.
+
+Two card-source formats are supported, picked by file extension (with a content
+sniff fallback):
+
+- **Markdown Q/A** (`.md`) — blocks of `Q:` then `A:`, either can span multiple
+  lines, and `---` separates cards:
+
+  ```markdown
+  Q: What does TCP stand for?
+  A: Transmission Control Protocol.
+
+  Q: Big-O of binary search?
+  A: O(log n).
+  ```
+
+- **Anki text export** (`.txt`) — one note per line, `front<TAB>back`, exactly
+  what Anki's "Notes in Plain Text" export produces (`#`-comment lines and simple
+  HTML like `<b>`/`&nbsp;` are handled).
+
+Select it and point at the file in config:
+
+```toml
+deck = "srs"
+srs_source = "~/.idle-hands/cards.md"   # your Markdown Q/A or Anki .txt export
+srs_reveal = "6s"                        # show the question this long, then the answer
+srs_spacing = 3                          # deprioritize the last N cards (0 = only avoid repeats)
+```
+
+Preview exactly what you'll get with `idle-hands deck srs`.
+
 ## Config
 
 All optional — with no config file you get the defaults above (the `move` deck,
@@ -160,7 +197,7 @@ a 20s threshold, no quiet hours). Drop a `~/.idle-hands/config.toml` to tune it;
 changes take effect on the next run:
 
 ```toml
-deck = "duck"            # which deck to show: move | duck | tidy | <your-deck>
+deck = "duck"            # which deck to show: move | duck | tidy | srs | <your-deck>
 busy_threshold = "30s"  # how long output must stay quiet before a card fires
 
 [quiet_hours]           # suppress cards during these local hours (optional)
@@ -170,6 +207,11 @@ end   = "07:00"         # wrapped and reclaimed time is still tallied
 
 Quiet-hours ranges may wrap past midnight (e.g. `22:00`→`07:00`). An unknown key
 or a malformed value is reported loudly so a typo never silently does nothing.
+
+The **srs** flashcard deck adds three optional keys — `srs_source` (path to your
+card file), `srs_reveal` (question-only delay, default `6s`), and `srs_spacing`
+(how many recent cards to hold back, default `3`). See
+[Flashcards](#flashcards-spaced-repetition) above.
 
 ## Stats
 

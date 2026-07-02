@@ -10,6 +10,7 @@ import (
 	"github.com/rwrife/idle-hands/internal/config"
 	"github.com/rwrife/idle-hands/internal/deck"
 	"github.com/rwrife/idle-hands/internal/detect"
+	"github.com/rwrife/idle-hands/internal/srs"
 	"github.com/rwrife/idle-hands/internal/store"
 	"github.com/rwrife/idle-hands/internal/wrap"
 )
@@ -76,7 +77,7 @@ func cmdWatch(args []string) (int, error) {
 	// Build the card renderer over the configured deck. A failure to load the
 	// deck degrades gracefully: fall back to the plain one-line notices rather
 	// than refusing to wrap the agent.
-	renderer := newCardRenderer(cfg.Deck)
+	renderer := newCardRenderer(cfg)
 
 	// Open the stats store. If it can't be opened we still wrap the agent —
 	// losing a scoreboard is no reason to fail the user's command — but we warn
@@ -134,21 +135,41 @@ func cmdWatch(args []string) (int, error) {
 	return res.ExitCode, nil
 }
 
-// newCardRenderer loads the named deck and returns a card.Renderer writing to
-// stderr. It resolves a user deck under ~/.idle-hands/decks over a built-in of
-// the same name (matching `deck` preview), so a user's own deck actually drives
-// the cards. If the deck can't be loaded it returns nil, and handleState falls
-// back to plain one-line notices so watch still works.
-func newCardRenderer(name string) *card.Renderer {
+// newCardRenderer builds the card.Renderer for the configured deck, writing to
+// stderr. Two paths:
+//
+//   - deck = "srs": load the user's flashcards from cfg.SRS.Source (Markdown
+//     Q/A or Anki export) and render them in reveal mode (question first, then
+//     the answer after cfg.SRS.Reveal) with recently-shown cards spaced out.
+//   - any other deck: resolve a user deck under ~/.idle-hands/decks over a
+//     built-in of the same name (matching `deck` preview), so a user's own deck
+//     actually drives the cards.
+//
+// If the deck can't be loaded it returns nil, and handleState falls back to
+// plain one-line notices so watch still works.
+func newCardRenderer(cfg config.Config) *card.Renderer {
+	if cfg.Deck == srs.DeckName {
+		d, err := srs.LoadDeck(cfg.SRS.Source)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "idle-hands: flashcard deck unavailable (%v); using plain notices\n", err)
+			return nil
+		}
+		return card.NewRenderer(os.Stderr, card.Options{
+			Deck:    d,
+			Reveal:  cfg.SRS.Reveal,
+			Spacing: cfg.SRS.Spacing,
+		})
+	}
+
 	userDir, err := config.DecksDir()
 	if err != nil {
 		// Can't locate the home dir; user decks are unavailable but built-ins
 		// still are. Resolve against an empty dir (built-ins only).
 		userDir = ""
 	}
-	d, _, err := deck.Resolve(name, userDir)
+	d, _, err := deck.Resolve(cfg.Deck, userDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "idle-hands: deck %q unavailable (%v); using plain notices\n", name, err)
+		fmt.Fprintf(os.Stderr, "idle-hands: deck %q unavailable (%v); using plain notices\n", cfg.Deck, err)
 		return nil
 	}
 	return card.NewRenderer(os.Stderr, card.Options{Deck: d})

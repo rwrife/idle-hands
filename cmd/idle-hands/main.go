@@ -34,7 +34,7 @@ Commands:
   help                       Show this help.
 
 Config (optional): ~/.idle-hands/config.toml
-  deck = "move"            # move | duck | tidy | <your-deck>
+  deck = "move"            # move | duck | tidy | srs | <your-deck>
   busy_threshold = "20s"  # how long quiet before a card fires
   [quiet_hours]           # suppress cards during these local hours
   start = "22:00"
@@ -44,11 +44,17 @@ User decks (optional): ~/.idle-hands/decks/*.toml
   Drop your own deck files there; they're listed by the deck command and
   selectable in config (a user deck overrides a built-in of the same name).
 
+Flashcards (optional): deck = "srs"
+  srs_source = "~/.idle-hands/cards.md"  # Markdown Q/A or an Anki .txt export
+  srs_reveal = "6s"                       # show the question, then reveal the answer
+  Shows one flashcard per wait (question first), never blocking your agent.
+
 Examples:
   idle-hands watch -- echo hi
   idle-hands watch -- claude
   idle-hands deck
   idle-hands deck duck
+  idle-hands deck srs
   idle-hands stats
   idle-hands version
 `

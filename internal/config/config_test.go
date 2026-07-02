@@ -19,6 +19,77 @@ func TestDefault(t *testing.T) {
 	if got.Quiet.Enabled() {
 		t.Errorf("Default().Quiet should be disabled, got %+v", got.Quiet)
 	}
+	if got.SRS.Reveal != DefaultSRSReveal {
+		t.Errorf("Default().SRS.Reveal = %s, want %s", got.SRS.Reveal, DefaultSRSReveal)
+	}
+	if got.SRS.Spacing != DefaultSRSSpacing {
+		t.Errorf("Default().SRS.Spacing = %d, want %d", got.SRS.Spacing, DefaultSRSSpacing)
+	}
+	if got.SRS.Source != "" {
+		t.Errorf("Default().SRS.Source = %q, want empty", got.SRS.Source)
+	}
+}
+
+// TestParseSRSValues checks the flashcard-deck keys resolve onto Config.SRS,
+// and that omitted srs_reveal/srs_spacing fall back to their defaults while a
+// present srs_source is taken verbatim.
+func TestParseSRSValues(t *testing.T) {
+	got, err := Parse([]byte(`
+deck = "srs"
+srs_source = "/home/me/.idle-hands/cards.md"
+srs_reveal = "8s"
+srs_spacing = 5
+`))
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	if got.Deck != "srs" {
+		t.Errorf("Deck = %q, want srs", got.Deck)
+	}
+	if got.SRS.Source != "/home/me/.idle-hands/cards.md" {
+		t.Errorf("SRS.Source = %q", got.SRS.Source)
+	}
+	if got.SRS.Reveal != 8*time.Second {
+		t.Errorf("SRS.Reveal = %s, want 8s", got.SRS.Reveal)
+	}
+	if got.SRS.Spacing != 5 {
+		t.Errorf("SRS.Spacing = %d, want 5", got.SRS.Spacing)
+	}
+}
+
+// TestParseSRSExpandsHomeInSource verifies a leading "~/" in srs_source is
+// expanded to the user's home directory, so the documented ~ form works.
+func TestParseSRSExpandsHomeInSource(t *testing.T) {
+	home := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
+	got, err := Parse([]byte("deck = \"srs\"\nsrs_source = \"~/.idle-hands/cards.md\"\n"))
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	want := filepath.Join(home, ".idle-hands", "cards.md")
+	if got.SRS.Source != want {
+		t.Errorf("SRS.Source = %q, want expanded %q", got.SRS.Source, want)
+	}
+}
+
+// TestParseSRSDefaults confirms that selecting the srs deck without tuning keys
+// keeps the reveal/spacing defaults, and that srs_spacing = 0 is a valid,
+// explicit "only avoid immediate repeats" setting.
+func TestParseSRSDefaults(t *testing.T) {
+	got, err := Parse([]byte("deck = \"srs\"\nsrs_spacing = 0\n"))
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	if got.SRS.Reveal != DefaultSRSReveal {
+		t.Errorf("SRS.Reveal = %s, want default %s", got.SRS.Reveal, DefaultSRSReveal)
+	}
+	if got.SRS.Spacing != 0 {
+		t.Errorf("SRS.Spacing = %d, want explicit 0", got.SRS.Spacing)
+	}
 }
 
 func TestLoadFileMissingReturnsDefault(t *testing.T) {
@@ -93,6 +164,10 @@ func TestParseErrors(t *testing.T) {
 		{"bad duration", `busy_threshold = "soon"`},
 		{"zero duration", `busy_threshold = "0s"`},
 		{"negative duration", `busy_threshold = "-5s"`},
+		{"bad srs_reveal", `srs_reveal = "soon"`},
+		{"zero srs_reveal", `srs_reveal = "0s"`},
+		{"negative srs_reveal", `srs_reveal = "-3s"`},
+		{"negative srs_spacing", `srs_spacing = -1`},
 		{"quiet start only", "[quiet_hours]\nstart = \"22:00\""},
 		{"quiet end only", "[quiet_hours]\nend = \"07:00\""},
 		{"quiet equal", "[quiet_hours]\nstart = \"09:00\"\nend = \"09:00\""},
