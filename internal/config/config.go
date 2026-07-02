@@ -59,6 +59,12 @@ type Config struct {
 	Deck string
 	// BusyThreshold is how long output must stay quiet before a card fires.
 	BusyThreshold time.Duration
+	// BusyThresholdSet reports whether busy_threshold was explicitly present in
+	// the config file (as opposed to defaulted). Consumers such as the --preset
+	// flag use it to decide precedence: an explicit config value wins over a
+	// preset's suggested threshold, while a preset still overrides the built-in
+	// default when the user left busy_threshold unset.
+	BusyThresholdSet bool
 	// Quiet is the daily window during which cards are suppressed.
 	Quiet QuietHours
 	// SRS holds the flashcard-deck settings, used only when Deck == "srs".
@@ -209,6 +215,7 @@ func Parse(data []byte) (Config, error) {
 			return Config{}, fmt.Errorf("busy_threshold must be positive, got %q", v)
 		}
 		cfg.BusyThreshold = d
+		cfg.BusyThresholdSet = true
 	}
 
 	quiet, err := parseQuietHours(fc.Quiet)
