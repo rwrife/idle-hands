@@ -124,6 +124,12 @@ embedded in the binary (no config needed):
 - **duck** — one rubber-duck question about what you're building
 - **tidy** — close one stray tab / triage one stale TODO
 
+Two more decks are generated live from *your* context rather than a fixed list:
+**srs** (your own flashcards, one per wait — see
+[Flashcards](#flashcards-spaced-repetition)) and **duckdiff** (one review
+question about your staged `git diff` via a local LLM — see
+[Duck the diff](#duck-the-diff-local-llm-review-question)).
+
 The same card is never shown twice in a row, and each busy window gets exactly
 one. List what you've got, or preview a deck's cards before selecting it:
 
@@ -231,6 +237,42 @@ srs_spacing = 3                          # deprioritize the last N cards (0 = on
 
 Preview exactly what you'll get with `idle-hands deck srs`.
 
+### Duck the diff (local LLM review question)
+
+When you're waiting on the agent, the thing most worth thinking about is usually
+**the change you just staged**. Point the built-in **duckdiff** deck at a local
+[Ollama](https://ollama.com) model and each busy window shows one sharp
+rubber-duck review question generated from your `git diff --cached`:
+
+```
+╭─ …agent is thinking (22s) ─────────────────────────╮
+│  🦆  Duck the diff                                  │
+│  You added a retry loop — what bounds the number    │
+│  of attempts so it can't spin forever?              │
+╰──────────────────────────────────── one card ──╯
+```
+
+It is built to **never get in your way**:
+
+- No git repo, or nothing staged, simply falls back to the static **duck** deck
+  (the generic rubber-duck prompts) — it's never an error.
+- The model call is **time-boxed** (default `4s`). If Ollama is down, unreachable,
+  or slow past the timeout, you get the static **duck** deck instead. The wait
+  never blocks on the model, and neither does your agent.
+- You get **one** question, not a wall of review notes.
+
+Select it in config (works with zero extra keys if you already run Ollama):
+
+```toml
+deck = "duckdiff"
+duckdiff_model   = "llama3.2"                          # any local Ollama model
+duckdiff_url     = "http://localhost:11434/api/generate"  # Ollama's default endpoint
+duckdiff_timeout = "4s"                                # fall back to duck past this
+```
+
+Stage something and preview exactly what you'd get with `idle-hands deck
+duckdiff` (it shows the live question, or the fallback and why).
+
 ## Config
 
 All optional — with no config file you get the defaults above (the `move` deck,
@@ -238,7 +280,7 @@ a 20s threshold, no quiet hours). Drop a `~/.idle-hands/config.toml` to tune it;
 changes take effect on the next run:
 
 ```toml
-deck = "duck"            # which deck to show: move | duck | tidy | srs | <your-deck>
+deck = "duck"            # which deck to show: move | duck | tidy | srs | duckdiff | <your-deck>
 busy_threshold = "30s"  # how long output must stay quiet before a card fires
 
 [quiet_hours]           # suppress cards during these local hours (optional)
@@ -253,6 +295,12 @@ The **srs** flashcard deck adds three optional keys — `srs_source` (path to yo
 card file), `srs_reveal` (question-only delay, default `6s`), and `srs_spacing`
 (how many recent cards to hold back, default `3`). See
 [Flashcards](#flashcards-spaced-repetition) above.
+
+The **duckdiff** deck adds three optional keys — `duckdiff_model` (the Ollama
+model, default `llama3.2`), `duckdiff_url` (the Ollama endpoint), and
+`duckdiff_timeout` (how long to wait before falling back to the static duck
+deck, default `4s`). See
+[Duck the diff](#duck-the-diff-local-llm-review-question) above.
 
 ## Stats
 
