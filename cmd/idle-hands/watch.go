@@ -10,6 +10,7 @@ import (
 	"github.com/rwrife/idle-hands/internal/config"
 	"github.com/rwrife/idle-hands/internal/deck"
 	"github.com/rwrife/idle-hands/internal/detect"
+	"github.com/rwrife/idle-hands/internal/preset"
 	"github.com/rwrife/idle-hands/internal/srs"
 	"github.com/rwrife/idle-hands/internal/store"
 	"github.com/rwrife/idle-hands/internal/wrap"
@@ -57,7 +58,17 @@ type watchEnv struct {
 //
 // A leading "--" separator (idle-hands watch -- echo hi) is stripped so flags
 // can be passed to the child without idle-hands trying to parse them.
+//
+// idle-hands' own flags (currently just --preset <name>) may appear before that
+// separator; they select a built-in detector profile tuned for a known agent
+// (Claude Code, Aider, Cursor, Codex, gh copilot). With no --preset the detector
+// keeps its generic quiet-timeout behavior. An explicit busy_threshold in config
+// still wins over the preset's suggested threshold.
 func cmdWatch(args []string) (int, error) {
+	presetName, args, err := parseWatchFlags(args)
+	if err != nil {
+		return 2, err
+	}
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
 	}
@@ -72,7 +83,11 @@ func cmdWatch(args []string) (int, error) {
 		return 1, fmt.Errorf("config: %w", err)
 	}
 
-	det := detect.New(detect.Config{BusyThreshold: cfg.BusyThreshold})
+	detCfg, err := detectorConfig(cfg, presetName)
+	if err != nil {
+		return 2, err
+	}
+	det := detect.New(detCfg)
 
 	// Build the card renderer over the configured deck. A failure to load the
 	// deck degrades gracefully: fall back to the plain one-line notices rather
@@ -133,6 +148,106 @@ func cmdWatch(args []string) (int, error) {
 		return 1, err
 	}
 	return res.ExitCode, nil
+}
+
+// parseWatchFlags pulls idle-hands' own flags off the front of the watch
+// argument list and returns the selected preset name ("" if none) plus the
+// remaining args (the wrapped command and its arguments, including any leading
+// "--"). Only flags before the first non-flag token (or an explicit "--") are
+// consumed, so `idle-hands watch --preset claude -- claude --dangerously` passes
+// --dangerously straight to the child.
+//
+// Supported forms: `--preset <name>` and `--preset=<name>` (also -preset). An
+// unknown idle-hands flag is an error rather than being forwarded, so a typo
+// like --presett is caught instead of silently handed to the agent.
+func parseWatchFlags(args []string) (presetName string, rest []string, err error) {
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		if arg == "--" {
+			return presetName, args[i:], nil // leave the separator for cmdWatch
+		}
+		// Once we hit a token that isn't one of our flags, everything from here
+		// on is the child command.
+		if len(arg) < 2 || arg[0] != '-' {
+			return presetName, args[i:], nil
+		}
+		name := arg
+		val := ""
+		hasVal := false
+		if eq := indexByte(arg, '='); eq >= 0 {
+			name, val, hasVal = arg[:eq], arg[eq+1:], true
+		}
+		switch name {
+		case "--preset", "-preset":
+			if !hasVal {
+				if i+1 >= len(args) {
+					return "", nil, fmt.Errorf("watch: --preset needs a value (one of: %s)", joinNames())
+				}
+				val = args[i+1]
+				i++
+			}
+			if _, ok := preset.Lookup(val); !ok {
+				return "", nil, preset.ErrorFor(val)
+			}
+			presetName = val
+		default:
+			return "", nil, fmt.Errorf("watch: unknown flag %q (did you forget \"--\" before the command?)", arg)
+		}
+		i++
+	}
+	return presetName, args[i:], nil
+}
+
+// detectorConfig builds the detect.Config for the watch loop from the resolved
+// config and an optional preset name. Precedence for the busy threshold is:
+// an explicit busy_threshold in config > the preset's suggested threshold > the
+// built-in default. Keyword hints from the preset are merged on top of
+// detect.DefaultKeywords so generic spinner/thinking detection still applies.
+// A blank preset name yields the plain config-driven behavior (unchanged).
+func detectorConfig(cfg config.Config, presetName string) (detect.Config, error) {
+	dc := detect.Config{BusyThreshold: cfg.BusyThreshold}
+	if presetName == "" {
+		return dc, nil
+	}
+	p, ok := preset.Lookup(presetName)
+	if !ok {
+		// parseWatchFlags already validated, but stay defensive.
+		return detect.Config{}, preset.ErrorFor(presetName)
+	}
+	// Threshold: config wins only if the user set it explicitly; otherwise the
+	// preset's tuned value replaces the default.
+	if !cfg.BusyThresholdSet && p.BusyThreshold > 0 {
+		dc.BusyThreshold = p.BusyThreshold
+	}
+	// Keywords: augment the detector defaults with the agent-specific hints.
+	dc.Keywords = p.MergeKeywords(detect.DefaultKeywords)
+	return dc, nil
+}
+
+// indexByte returns the index of the first b in s, or -1. A tiny local helper so
+// flag parsing doesn't pull in the strings package for one call.
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+// joinNames renders the valid preset names for a usage message. Kept here so the
+// message stays consistent with preset.Names without importing strings.
+func joinNames() string {
+	names := preset.Names()
+	out := ""
+	for i, n := range names {
+		if i > 0 {
+			out += ", "
+		}
+		out += n
+	}
+	return out
 }
 
 // newCardRenderer builds the card.Renderer for the configured deck, writing to
