@@ -10,6 +10,7 @@ import (
 	"github.com/rwrife/idle-hands/internal/config"
 	"github.com/rwrife/idle-hands/internal/deck"
 	"github.com/rwrife/idle-hands/internal/detect"
+	"github.com/rwrife/idle-hands/internal/duckdiff"
 	"github.com/rwrife/idle-hands/internal/preset"
 	"github.com/rwrife/idle-hands/internal/srs"
 	"github.com/rwrife/idle-hands/internal/store"
@@ -251,11 +252,15 @@ func joinNames() string {
 }
 
 // newCardRenderer builds the card.Renderer for the configured deck, writing to
-// stderr. Two paths:
+// stderr. Three paths:
 //
 //   - deck = "srs": load the user's flashcards from cfg.SRS.Source (Markdown
 //     Q/A or Anki export) and render them in reveal mode (question first, then
 //     the answer after cfg.SRS.Reveal) with recently-shown cards spaced out.
+//   - deck = "duckdiff": generate one review question from the staged git diff
+//     via a local Ollama model, falling back to the static "duck" deck when
+//     there's no repo, nothing staged, or Ollama is unavailable/slow. The model
+//     call is time-boxed here at startup and never blocks the watch loop.
 //   - any other deck: resolve a user deck under ~/.idle-hands/decks over a
 //     built-in of the same name (matching `deck` preview), so a user's own deck
 //     actually drives the cards.
@@ -274,6 +279,26 @@ func newCardRenderer(cfg config.Config) *card.Renderer {
 			Reveal:  cfg.SRS.Reveal,
 			Spacing: cfg.SRS.Spacing,
 		})
+	}
+
+	if cfg.Deck == duckdiff.DeckName {
+		res, err := duckdiff.LoadDeck(duckdiff.Options{
+			Model:   cfg.DuckDiff.Model,
+			URL:     cfg.DuckDiff.URL,
+			Timeout: cfg.DuckDiff.Timeout,
+		})
+		if err != nil {
+			// Even the static fallback deck failed to load (a build-time bug);
+			// degrade to plain notices rather than refuse to wrap the agent.
+			fmt.Fprintf(os.Stderr, "idle-hands: duckdiff deck unavailable (%v); using plain notices\n", err)
+			return nil
+		}
+		if !res.Live {
+			// Not an error: no repo / nothing staged / Ollama down. Say which,
+			// once, so the static-duck fallback isn't a silent surprise.
+			fmt.Fprintf(os.Stderr, "idle-hands: duckdiff → %s; showing the static duck deck\n", res.Reason)
+		}
+		return card.NewRenderer(os.Stderr, card.Options{Deck: res.Deck})
 	}
 
 	userDir, err := config.DecksDir()

@@ -37,7 +37,7 @@ Commands:
   help                       Show this help.
 
 Config (optional): ~/.idle-hands/config.toml
-  deck = "move"            # move | duck | tidy | srs | <your-deck>
+  deck = "move"            # move | duck | tidy | srs | duckdiff | <your-deck>
   busy_threshold = "20s"  # how long quiet before a card fires
   [quiet_hours]           # suppress cards during these local hours
   start = "22:00"
@@ -52,6 +52,14 @@ Flashcards (optional): deck = "srs"
   srs_reveal = "6s"                       # show the question, then reveal the answer
   Shows one flashcard per wait (question first), never blocking your agent.
 
+Duck the diff (optional): deck = "duckdiff"
+  duckdiff_model   = "llama3.2"                     # local Ollama model to ask
+  duckdiff_url     = "http://localhost:11434/api/generate"
+  duckdiff_timeout = "4s"                            # fall back to duck past this
+  Turns your staged 'git diff' into one review question via local Ollama.
+  No repo, nothing staged, or Ollama unavailable falls back to the duck deck;
+  the model call is time-boxed and never blocks your agent.
+
 Agent presets (optional): --preset <name>
   claude | aider | cursor | codex | gh-copilot
   Pre-tunes the busy threshold and "thinking" keyword hints for that agent.
@@ -65,6 +73,7 @@ Examples:
   idle-hands deck
   idle-hands deck duck
   idle-hands deck srs
+  idle-hands deck duckdiff
   idle-hands preset
   idle-hands preset claude
   idle-hands stats

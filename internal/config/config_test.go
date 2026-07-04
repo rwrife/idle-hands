@@ -28,6 +28,12 @@ func TestDefault(t *testing.T) {
 	if got.SRS.Source != "" {
 		t.Errorf("Default().SRS.Source = %q, want empty", got.SRS.Source)
 	}
+	if got.DuckDiff.Timeout != DefaultDuckDiffTimeout {
+		t.Errorf("Default().DuckDiff.Timeout = %s, want %s", got.DuckDiff.Timeout, DefaultDuckDiffTimeout)
+	}
+	if got.DuckDiff.Model != "" || got.DuckDiff.URL != "" {
+		t.Errorf("Default().DuckDiff model/url should be empty (defaults applied by duckdiff), got %+v", got.DuckDiff)
+	}
 }
 
 // TestParseSRSValues checks the flashcard-deck keys resolve onto Config.SRS,
@@ -89,6 +95,56 @@ func TestParseSRSDefaults(t *testing.T) {
 	}
 	if got.SRS.Spacing != 0 {
 		t.Errorf("SRS.Spacing = %d, want explicit 0", got.SRS.Spacing)
+	}
+}
+
+// TestParseDuckDiffValues checks the duckdiff keys resolve onto Config.DuckDiff,
+// taking the model/url verbatim and parsing the timeout duration.
+func TestParseDuckDiffValues(t *testing.T) {
+	got, err := Parse([]byte(`
+deck = "duckdiff"
+duckdiff_model = "codellama"
+duckdiff_url = "http://127.0.0.1:11434/api/generate"
+duckdiff_timeout = "7s"
+`))
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	if got.Deck != "duckdiff" {
+		t.Errorf("Deck = %q, want duckdiff", got.Deck)
+	}
+	if got.DuckDiff.Model != "codellama" {
+		t.Errorf("DuckDiff.Model = %q, want codellama", got.DuckDiff.Model)
+	}
+	if got.DuckDiff.URL != "http://127.0.0.1:11434/api/generate" {
+		t.Errorf("DuckDiff.URL = %q", got.DuckDiff.URL)
+	}
+	if got.DuckDiff.Timeout != 7*time.Second {
+		t.Errorf("DuckDiff.Timeout = %s, want 7s", got.DuckDiff.Timeout)
+	}
+}
+
+// TestParseDuckDiffDefaults confirms omitted duckdiff keys keep the default
+// timeout and leave model/url empty (so duckdiff applies its own defaults).
+func TestParseDuckDiffDefaults(t *testing.T) {
+	got, err := Parse([]byte(`deck = "duckdiff"` + "\n"))
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	if got.DuckDiff.Timeout != DefaultDuckDiffTimeout {
+		t.Errorf("DuckDiff.Timeout = %s, want default %s", got.DuckDiff.Timeout, DefaultDuckDiffTimeout)
+	}
+	if got.DuckDiff.Model != "" || got.DuckDiff.URL != "" {
+		t.Errorf("omitted duckdiff model/url should stay empty, got %+v", got.DuckDiff)
+	}
+}
+
+// TestParseDuckDiffBadTimeout rejects a non-duration or non-positive timeout.
+func TestParseDuckDiffBadTimeout(t *testing.T) {
+	for _, bad := range []string{"duckdiff_timeout = \"soon\"", "duckdiff_timeout = \"0s\"", "duckdiff_timeout = \"-3s\""} {
+		if _, err := Parse([]byte(bad + "\n")); err == nil {
+			t.Errorf("Parse(%q) expected error, got nil", bad)
+		}
 	}
 }
 

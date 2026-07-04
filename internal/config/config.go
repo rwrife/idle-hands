@@ -45,6 +45,12 @@ const DefaultSRSReveal = 6 * time.Second
 // waits. It only applies to the "srs" deck.
 const DefaultSRSSpacing = 3
 
+// DefaultDuckDiffTimeout bounds the whole Ollama round-trip for the "duckdiff"
+// deck when config sets no duckdiff_timeout. Past it, watch falls back to the
+// static "duck" deck rather than make you wait on the model. It mirrors
+// duckdiff.DefaultTimeout (kept as a literal here to avoid a dependency cycle).
+const DefaultDuckDiffTimeout = 4 * time.Second
+
 // dirName / fileName are the on-disk locations under the user's home directory.
 const (
 	dirName   = ".idle-hands"
@@ -69,6 +75,26 @@ type Config struct {
 	Quiet QuietHours
 	// SRS holds the flashcard-deck settings, used only when Deck == "srs".
 	SRS SRSConfig
+	// DuckDiff holds the diff-review-deck settings, used only when Deck ==
+	// "duckdiff".
+	DuckDiff DuckDiffConfig
+}
+
+// DuckDiffConfig tunes the "duckdiff" deck: which local Ollama model to ask for
+// a review question about the staged diff, where to reach Ollama, and how long
+// to wait before falling back to the static "duck" deck. It is only consulted
+// when Deck is "duckdiff"; for any other deck these fields are ignored. Every
+// field is optional — an empty model/url uses duckdiff's defaults — so
+// deck = "duckdiff" works with zero extra config for anyone already running
+// Ollama.
+type DuckDiffConfig struct {
+	// Model is the Ollama model asked for the question. Empty uses the default.
+	Model string
+	// URL is the Ollama generate endpoint. Empty uses the default.
+	URL string
+	// Timeout bounds the model round-trip. <= 0 is treated as the default by
+	// consumers.
+	Timeout time.Duration
 }
 
 // SRSConfig tunes the spaced-repetition ("srs") flashcard deck: where the cards
@@ -112,6 +138,9 @@ type fileConfig struct {
 	SRSSource     string         `toml:"srs_source"`
 	SRSReveal     string         `toml:"srs_reveal"`
 	SRSSpacing    *int           `toml:"srs_spacing"`
+	DuckDiffModel string         `toml:"duckdiff_model"`
+	DuckDiffURL   string         `toml:"duckdiff_url"`
+	DuckDiffTO    string         `toml:"duckdiff_timeout"`
 }
 
 type fileQuietHours struct {
@@ -130,6 +159,9 @@ func Default() Config {
 		SRS: SRSConfig{
 			Reveal:  DefaultSRSReveal,
 			Spacing: DefaultSRSSpacing,
+		},
+		DuckDiff: DuckDiffConfig{
+			Timeout: DefaultDuckDiffTimeout,
 		},
 	}
 }
@@ -228,6 +260,10 @@ func Parse(data []byte) (Config, error) {
 		return Config{}, err
 	}
 
+	if err := applyDuckDiff(&cfg, fc); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
 }
 
@@ -260,6 +296,32 @@ func applySRS(cfg *Config, fc fileConfig) error {
 			return fmt.Errorf("srs_spacing must be >= 0, got %d", *fc.SRSSpacing)
 		}
 		cfg.SRS.Spacing = *fc.SRSSpacing
+	}
+	return nil
+}
+
+// applyDuckDiff resolves the diff-review-deck settings onto cfg. The model name
+// and URL are taken verbatim (empty keeps duckdiff's default). A blank
+// duckdiff_timeout keeps the default; a present one must be a positive duration.
+// None of these are validated against a running Ollama here — a config with
+// deck != "duckdiff" must not be rejected for an unreachable model — so
+// availability is handled at watch time by falling back to the static duck deck.
+func applyDuckDiff(cfg *Config, fc fileConfig) error {
+	if v := strings.TrimSpace(fc.DuckDiffModel); v != "" {
+		cfg.DuckDiff.Model = v
+	}
+	if v := strings.TrimSpace(fc.DuckDiffURL); v != "" {
+		cfg.DuckDiff.URL = v
+	}
+	if v := strings.TrimSpace(fc.DuckDiffTO); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("duckdiff_timeout %q: %w", v, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("duckdiff_timeout must be positive, got %q", v)
+		}
+		cfg.DuckDiff.Timeout = d
 	}
 	return nil
 }

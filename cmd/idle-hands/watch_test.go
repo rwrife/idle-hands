@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,13 @@ import (
 	"github.com/rwrife/idle-hands/internal/deck"
 	"github.com/rwrife/idle-hands/internal/detect"
 	"github.com/rwrife/idle-hands/internal/store"
+)
+
+// osGetwd/osChdir are thin aliases so the cwd-swapping test reads clearly and
+// the os import has a single obvious use here.
+var (
+	osGetwd = os.Getwd
+	osChdir = os.Chdir
 )
 
 // testEnv builds a watchEnv whose renderer writes to a buffer, with a temp-file
@@ -102,5 +110,32 @@ func TestRunStatsCommandRouting(t *testing.T) {
 
 	if code := run([]string{"stats"}); code != 0 {
 		t.Fatalf("run(stats) = %d, want 0", code)
+	}
+}
+
+// TestNewCardRendererDuckDiffFallsBack verifies the duckdiff deck wiring: run
+// from a non-git temp dir so LoadDeck hits the "not a git repo" path, falls
+// back to the static duck deck, and still returns a usable renderer (never nil).
+// This exercises the watch integration without needing a repo or a live Ollama.
+func TestNewCardRendererDuckDiffFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	old, err := osGetwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := osChdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = osChdir(old) })
+
+	cfg := config.Default()
+	cfg.Deck = "duckdiff"
+	// A short timeout keeps the test fast even if a stray Ollama is reachable;
+	// the non-git dir means we shouldn't reach the model at all.
+	cfg.DuckDiff.Timeout = 200 * time.Millisecond
+
+	r := newCardRenderer(cfg)
+	if r == nil {
+		t.Fatal("newCardRenderer(duckdiff) = nil, want a fallback renderer")
 	}
 }
