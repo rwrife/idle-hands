@@ -73,6 +73,38 @@ window is tallied to `~/.idle-hands/state.json` for `idle-hands stats`. Pass
 `--preset <agent>` to start from detection tuning matched to a known agent (see
 [Agent presets](#agent-presets)).
 
+## Standalone watcher mode (GUI agents / no wrapping)
+
+Some agents can't be run as a wrapped child — a GUI app, an IDE sidebar (Cursor,
+VS Code + Copilot), or something you already have running. For those, point
+`idle-hands` at a **running process by name** and it watches that process's CPU
+activity instead of its output:
+
+```bash
+idle-hands watch --process code       # watch the running "code" process
+idle-hands watch --process claude      # or a background CLI agent by name
+```
+
+It reuses the exact same BUSY/IDLE detector, decks, cards, quiet hours, and
+stats as wrapped mode — only the *signal* differs. When the process goes quiet
+(near-zero CPU: blocked, waiting on the model, "thinking") for the busy
+threshold, one card fires; when it starts burning CPU again the card clears and
+the reclaimed window is tallied. Stop it with Ctrl-C.
+
+Name matching is case-insensitive against the process name (and, failing that,
+its executable's basename). When several processes match (GUI apps spawn helper
+trees), the busiest one is chosen so the target stays stable. `--process` and a
+wrapped `-- <cmd>` are mutually exclusive.
+
+**Platform caveats:**
+
+- **Linux** — supported today via `/proc/<pid>/stat` CPU accounting. No extra
+  permissions needed for your own processes.
+- **macOS / Windows** — the CPU sampler isn't implemented yet, so this mode
+  exits with a clear message there; wrapped mode (`watch -- <cmd>`) works on all
+  platforms. Native samplers (macOS libproc, Windows PDH/Toolhelp) and an
+  optional window-title/focus signal are tracked follow-ups.
+
 ## Build from source
 
 Requires Go 1.23+.

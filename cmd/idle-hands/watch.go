@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rwrife/idle-hands/internal/card"
@@ -38,6 +39,27 @@ type watchEnv struct {
 	suppressed bool
 }
 
+// newWatchEnv builds the shared runtime environment both watch modes use: the
+// card renderer over the configured deck (nil on load failure, in which case
+// handleState falls back to plain notices), the stats store (nil, with a single
+// warning, if it can't be opened), the configured quiet-hours window, and the
+// real clock. Centralizing it keeps the wrapped-command and standalone-process
+// paths behaving identically around cards, stats, and quiet hours.
+func newWatchEnv(cfg config.Config) *watchEnv {
+	renderer := newCardRenderer(cfg)
+	st, err := store.New(store.Options{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "idle-hands: stats unavailable (%v); not recording\n", err)
+		st = nil
+	}
+	return &watchEnv{
+		renderer: renderer,
+		store:    st,
+		quiet:    cfg.Quiet,
+		now:      time.Now,
+	}
+}
+
 // cmdWatch runs the wrapped command under idle-hands. The child is spawned via
 // internal/wrap (a PTY on Unix so interactive agent TUIs render identically to
 // running them directly; a stdio passthrough on Windows). A copy of the child's
@@ -66,15 +88,9 @@ type watchEnv struct {
 // keeps its generic quiet-timeout behavior. An explicit busy_threshold in config
 // still wins over the preset's suggested threshold.
 func cmdWatch(args []string) (int, error) {
-	presetName, args, err := parseWatchFlags(args)
+	flags, args, err := parseWatchFlags(args)
 	if err != nil {
 		return 2, err
-	}
-	if len(args) > 0 && args[0] == "--" {
-		args = args[1:]
-	}
-	if len(args) == 0 {
-		return 2, errNoCommand
 	}
 
 	// Load config; a missing file yields defaults. A malformed file is a real
@@ -84,32 +100,34 @@ func cmdWatch(args []string) (int, error) {
 		return 1, fmt.Errorf("config: %w", err)
 	}
 
-	detCfg, err := detectorConfig(cfg, presetName)
+	detCfg, err := detectorConfig(cfg, flags.preset)
 	if err != nil {
 		return 2, err
 	}
+
+	// Standalone watcher mode: instead of wrapping a command, watch an
+	// already-running process's CPU activity through the same detector/card/
+	// store pipeline. `--process` and a wrapped command are mutually exclusive.
+	if flags.process != "" {
+		if len(args) > 0 && args[0] == "--" {
+			args = args[1:]
+		}
+		if len(args) > 0 {
+			return 2, fmt.Errorf("watch: --process %q cannot be combined with a wrapped command (%s)", flags.process, args[0])
+		}
+		return cmdWatchProcess(flags.process, cfg, detCfg)
+	}
+
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		return 2, errNoCommand
+	}
+
 	det := detect.New(detCfg)
 
-	// Build the card renderer over the configured deck. A failure to load the
-	// deck degrades gracefully: fall back to the plain one-line notices rather
-	// than refusing to wrap the agent.
-	renderer := newCardRenderer(cfg)
-
-	// Open the stats store. If it can't be opened we still wrap the agent —
-	// losing a scoreboard is no reason to fail the user's command — but we warn
-	// once so a broken stats dir is visible.
-	st, err := store.New(store.Options{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "idle-hands: stats unavailable (%v); not recording\n", err)
-		st = nil
-	}
-
-	env := &watchEnv{
-		renderer: renderer,
-		store:    st,
-		quiet:    cfg.Quiet,
-		now:      time.Now,
-	}
+	env := newWatchEnv(cfg)
 
 	// Drain the output tap, feeding each chunk to the detector. A ticker on the
 	// same loop advances the time-based BUSY check. The loop exits when wrap
@@ -151,27 +169,37 @@ func cmdWatch(args []string) (int, error) {
 	return res.ExitCode, nil
 }
 
+// watchFlags holds idle-hands' own parsed flags for the watch subcommand.
+type watchFlags struct {
+	// preset is the selected agent preset name ("" if none).
+	preset string
+	// process is the target process name for standalone watcher mode ("" when
+	// wrapping a command instead).
+	process string
+}
+
 // parseWatchFlags pulls idle-hands' own flags off the front of the watch
-// argument list and returns the selected preset name ("" if none) plus the
-// remaining args (the wrapped command and its arguments, including any leading
-// "--"). Only flags before the first non-flag token (or an explicit "--") are
-// consumed, so `idle-hands watch --preset claude -- claude --dangerously` passes
+// argument list and returns them plus the remaining args (the wrapped command
+// and its arguments, including any leading "--"). Only flags before the first
+// non-flag token (or an explicit "--") are consumed, so
+// `idle-hands watch --preset claude -- claude --dangerously` passes
 // --dangerously straight to the child.
 //
-// Supported forms: `--preset <name>` and `--preset=<name>` (also -preset). An
-// unknown idle-hands flag is an error rather than being forwarded, so a typo
-// like --presett is caught instead of silently handed to the agent.
-func parseWatchFlags(args []string) (presetName string, rest []string, err error) {
+// Supported forms: `--preset <name>`/`--preset=<name>` and
+// `--process <name>`/`--process=<name>` (also single-dash). An unknown
+// idle-hands flag is an error rather than being forwarded, so a typo like
+// --presett is caught instead of silently handed to the agent.
+func parseWatchFlags(args []string) (flags watchFlags, rest []string, err error) {
 	i := 0
 	for i < len(args) {
 		arg := args[i]
 		if arg == "--" {
-			return presetName, args[i:], nil // leave the separator for cmdWatch
+			return flags, args[i:], nil // leave the separator for cmdWatch
 		}
 		// Once we hit a token that isn't one of our flags, everything from here
 		// on is the child command.
 		if len(arg) < 2 || arg[0] != '-' {
-			return presetName, args[i:], nil
+			return flags, args[i:], nil
 		}
 		name := arg
 		val := ""
@@ -183,21 +211,33 @@ func parseWatchFlags(args []string) (presetName string, rest []string, err error
 		case "--preset", "-preset":
 			if !hasVal {
 				if i+1 >= len(args) {
-					return "", nil, fmt.Errorf("watch: --preset needs a value (one of: %s)", joinNames())
+					return watchFlags{}, nil, fmt.Errorf("watch: --preset needs a value (one of: %s)", joinNames())
 				}
 				val = args[i+1]
 				i++
 			}
 			if _, ok := preset.Lookup(val); !ok {
-				return "", nil, preset.ErrorFor(val)
+				return watchFlags{}, nil, preset.ErrorFor(val)
 			}
-			presetName = val
+			flags.preset = val
+		case "--process", "-process":
+			if !hasVal {
+				if i+1 >= len(args) {
+					return watchFlags{}, nil, fmt.Errorf("watch: --process needs a value (a running process name)")
+				}
+				val = args[i+1]
+				i++
+			}
+			if strings.TrimSpace(val) == "" {
+				return watchFlags{}, nil, fmt.Errorf("watch: --process needs a non-empty process name")
+			}
+			flags.process = val
 		default:
-			return "", nil, fmt.Errorf("watch: unknown flag %q (did you forget \"--\" before the command?)", arg)
+			return watchFlags{}, nil, fmt.Errorf("watch: unknown flag %q (did you forget \"--\" before the command?)", arg)
 		}
 		i++
 	}
-	return presetName, args[i:], nil
+	return flags, args[i:], nil
 }
 
 // detectorConfig builds the detect.Config for the watch loop from the resolved

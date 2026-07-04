@@ -30,6 +30,10 @@ Commands:
                              Run <cmd>, passing I/O straight through, and show
                              one micro-action card while it's "thinking".
                              --preset tunes detection for a known agent.
+  watch --process <name>     Standalone mode: watch an already-running process's
+                             CPU activity instead of wrapping a command (for GUI
+                             agents / IDE sidebars). Same cards + stats. Linux
+                             today; macOS/Windows samplers are a follow-up.
   deck [name]                List decks, or preview one deck's cards.
   preset [name]              List agent presets, or show one preset's tuning.
   stats                      Show reclaimed idle time ("reclaimed X min today").
@@ -70,6 +74,7 @@ Examples:
   idle-hands watch -- echo hi
   idle-hands watch -- claude
   idle-hands watch --preset claude -- claude
+  idle-hands watch --process code
   idle-hands deck
   idle-hands deck duck
   idle-hands deck srs

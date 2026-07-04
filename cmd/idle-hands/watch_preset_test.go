@@ -29,12 +29,12 @@ func TestParseWatchFlagsPreset(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotPreset, gotRest, err := parseWatchFlags(tc.in)
+			gotFlags, gotRest, err := parseWatchFlags(tc.in)
 			if err != nil {
 				t.Fatalf("parseWatchFlags(%v) error: %v", tc.in, err)
 			}
-			if gotPreset != tc.wantPreset {
-				t.Errorf("preset = %q, want %q", gotPreset, tc.wantPreset)
+			if gotFlags.preset != tc.wantPreset {
+				t.Errorf("preset = %q, want %q", gotFlags.preset, tc.wantPreset)
 			}
 			if !equalStrings(gotRest, tc.wantRest) {
 				t.Errorf("rest = %v, want %v", gotRest, tc.wantRest)
