@@ -33,3 +33,35 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+  release-check:
+    name: release config + snapshot build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so GoReleaser can resolve tags/changelog
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      # Validate .goreleaser.yaml and do a full cross-compile + archive run
+      # WITHOUT publishing, using the same version the real Release workflow
+      # pins. This catches a broken release pipeline on every PR instead of
+      # at v* tag time, when it's too late.
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2.6"
+          args: check
+
+      - name: Snapshot release (no publish)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2.6"
+          args: release --snapshot --clean

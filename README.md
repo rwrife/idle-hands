@@ -363,8 +363,14 @@ git push origin v0.1.0
 Dry-run the build locally without publishing (requires `goreleaser`):
 
 ```bash
+goreleaser check                        # validate .goreleaser.yaml
 goreleaser release --snapshot --clean   # artifacts land in ./dist
 ```
+
+You don't have to remember to run that: CI's **release config + snapshot
+build** job runs the exact same `check` + snapshot cross-compile on every PR
+with the same pinned GoReleaser version the release uses, so a broken release
+pipeline fails a PR long before anyone pushes a `v*` tag.
 
 ## License
 
