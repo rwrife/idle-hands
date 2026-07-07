@@ -30,7 +30,13 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: "~> v2"
+          # Pin to the v2 line that supports this config (the archives
+          # `formats:` field landed in GoReleaser v2.6). A bare "~> v2"
+          # floats to whatever v2.x is newest at tag time, so a future
+          # breaking change could fail the release with no warning. The
+          # release-check job in ci.yml exercises this same version on
+          # every PR so breakage surfaces before a tag is ever pushed.
+          version: "~> v2.6"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
