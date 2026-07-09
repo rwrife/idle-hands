@@ -56,6 +56,7 @@ idle-hands watch --preset claude -- claude # tune detection for a known agent
 idle-hands deck                            # see the available decks
 idle-hands preset                          # see the agent presets
 idle-hands stats                           # "reclaimed 14 min across 9 waits today"
+idle-hands recap                           # today + this week + your streak 🔥
 ```
 
 ## How it works
@@ -347,6 +348,44 @@ All-time: 2 h 8 min across 71 waits.
 ```
 
 (The all-time line appears once you have history beyond today.)
+
+## Recap (streak + weekly)
+
+`stats` is today's number; **`recap`** is the payoff — it reads the same local
+`state.json` (now a rolling multi-day history, kept 60 days by default) and
+rolls it up into today's total, the last 7 days, and your current streak:
+
+```bash
+$ idle-hands recap
+idle-hands 🙌 — reclaimed 22 min across 5 waits today.
+This week: 1 h 48 min across 31 waits.
+🔥 4-day streak.
+```
+
+A **streak** is the number of consecutive days — counting back from today —
+that each reclaimed at least one window; a day with none breaks it (so keep
+wrapping your agent to keep the fire lit). Add `--weekly` for a per-day
+breakdown of the last 7 days, with gaps shown as a dash:
+
+```bash
+$ idle-hands recap --weekly
+idle-hands 🙌 — reclaimed 22 min across 5 waits today.
+This week: 1 h 48 min across 31 waits.
+🔥 4-day streak.
+
+Last 7 days:
+  Thu 07-09  22 min across 5 waits
+  Wed 07-08  31 min across 8 waits
+  Tue 07-07  18 min across 6 waits
+  Mon 07-06  37 min across 12 waits
+  Sun 07-05  —
+  Sat 07-04  —
+  Fri 07-03  —
+```
+
+`stats` output for *today* is unchanged; `recap` just adds the longer view. An
+existing single-day `state.json` from an older build is migrated to the history
+format transparently on first read — no data loss, nothing to run.
 
 ## Releasing
 

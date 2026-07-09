@@ -37,6 +37,8 @@ Commands:
   deck [name]                List decks, or preview one deck's cards.
   preset [name]              List agent presets, or show one preset's tuning.
   stats                      Show reclaimed idle time ("reclaimed X min today").
+  recap [--weekly]           Roundup: today + rolling-7-day reclaimed time and
+                             your current streak. --weekly adds a per-day view.
   version                    Print the build version.
   help                       Show this help.
 
@@ -82,6 +84,8 @@ Examples:
   idle-hands preset
   idle-hands preset claude
   idle-hands stats
+  idle-hands recap
+  idle-hands recap --weekly
   idle-hands version
 `
 
@@ -130,6 +134,13 @@ func run(args []string) int {
 
 	case "stats":
 		code, err := cmdStats(rest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
+		}
+		return code
+
+	case "recap":
+		code, err := cmdRecap(rest)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
 		}
