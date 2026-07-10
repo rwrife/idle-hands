@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
@@ -155,7 +156,7 @@ func TestLoadFileMissingReturnsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile(missing) error = %v, want nil", err)
 	}
-	if got != Default() {
+	if !reflect.DeepEqual(got, Default()) {
 		t.Errorf("LoadFile(missing) = %+v, want Default() %+v", got, Default())
 	}
 }
