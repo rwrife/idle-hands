@@ -33,6 +33,12 @@ const (
 // dateFormat is the local calendar-day key used in the stats map.
 const dateFormat = "2006-01-02"
 
+// DefaultRetentionDays is how many days of history are kept by default. Older
+// day entries are pruned on the next write so the file stays small without a
+// database. The recap/streak features look back at most a week, so 60 days is
+// generous headroom while still bounding growth.
+const DefaultRetentionDays = 60
+
 // DayStat is one calendar day's tally.
 type DayStat struct {
 	// Windows is the number of completed BUSY windows reclaimed that day.
@@ -44,9 +50,21 @@ type DayStat struct {
 // data is the on-disk document: a version marker plus the per-day tallies keyed
 // by "YYYY-MM-DD". The version lets a future format change be detected rather
 // than silently misread.
+//
+// The inlined Windows/Seconds fields exist only to migrate a legacy single-day
+// file (which stored one day's tally at the top level with no Days map) into
+// the current per-day format transparently on first load. New writes never set
+// them; see read for the migration.
 type data struct {
 	Version int                `json:"version"`
 	Days    map[string]DayStat `json:"days"`
+
+	// Legacy top-level tally (pre-history format). Read-only migration source.
+	LegacyWindows int   `json:"windows,omitempty"`
+	LegacySeconds int64 `json:"seconds,omitempty"`
+	// LegacyDate optionally names the day the legacy tally belonged to; if
+	// absent, it is attributed to today on migration.
+	LegacyDate string `json:"date,omitempty"`
 }
 
 const currentVersion = 1
@@ -56,8 +74,9 @@ const currentVersion = 1
 // concurrent use across processes, but idle-hands records from one goroutine in
 // one process, so a read-modify-write per window is fine.
 type Store struct {
-	path string
-	now  func() time.Time
+	path      string
+	now       func() time.Time
+	retention int
 }
 
 // Options configure a Store.
@@ -67,6 +86,10 @@ type Options struct {
 	// Now returns the current time; the local date of it keys each record.
 	// Nil selects time.Now.
 	Now func() time.Time
+	// RetentionDays bounds how many days of history are kept: on write, day
+	// entries older than this many days (relative to Now) are pruned. Zero
+	// selects DefaultRetentionDays; a negative value disables pruning.
+	RetentionDays int
 }
 
 // New builds a Store. With a zero Options it targets the default path and the
@@ -84,7 +107,11 @@ func New(opts Options) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Store{path: path, now: now}, nil
+	retention := opts.RetentionDays
+	if retention == 0 {
+		retention = DefaultRetentionDays
+	}
+	return &Store{path: path, now: now, retention: retention}, nil
 }
 
 // DefaultPath returns ~/.idle-hands/state.json.
@@ -160,6 +187,88 @@ func (s *Store) Days() ([]string, error) {
 	return keys, nil
 }
 
+// History returns a copy of the per-day tallies keyed by "YYYY-MM-DD". The map
+// is a defensive copy, safe for the caller to mutate. It backs the recap
+// command's rolling-window and per-day views.
+func (s *Store) History() (map[string]DayStat, error) {
+	d, err := s.read()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]DayStat, len(d.Days))
+	for k, v := range d.Days {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// Window sums the tallies for the last n calendar days ending today
+// (inclusive), where today is derived from the Store's clock. n <= 0 returns a
+// zero DayStat. Days with no entry contribute nothing, so a rolling total
+// naturally ignores gaps. This backs the recap "today" (n=1) and
+// rolling-week (n=7) lines from one code path.
+func (s *Store) Window(n int) (DayStat, error) {
+	if n <= 0 {
+		return DayStat{}, nil
+	}
+	d, err := s.read()
+	if err != nil {
+		return DayStat{}, err
+	}
+	today := s.now()
+	var sum DayStat
+	for i := 0; i < n; i++ {
+		key := today.AddDate(0, 0, -i).Format(dateFormat)
+		if day, ok := d.Days[key]; ok {
+			sum.Windows += day.Windows
+			sum.Seconds += day.Seconds
+		}
+	}
+	return sum, nil
+}
+
+// Streak returns the number of consecutive calendar days, counting back from
+// today (inclusive), that each recorded at least one reclaimed window. A day
+// with no window — or no entry at all — breaks the streak. A window recorded
+// only for a future date does not count. If today has no window, the streak is
+// zero even if yesterday had one (the chain must reach today to be "current").
+func (s *Store) Streak() (int, error) {
+	d, err := s.read()
+	if err != nil {
+		return 0, err
+	}
+	today := s.now()
+	streak := 0
+	for i := 0; ; i++ {
+		key := today.AddDate(0, 0, -i).Format(dateFormat)
+		day, ok := d.Days[key]
+		if !ok || day.Windows <= 0 {
+			break
+		}
+		streak++
+	}
+	return streak, nil
+}
+
+// prune drops day entries older than the retention window (relative to the
+// Store's clock) in place. A non-positive retention disables pruning. Keys that
+// don't parse as a date are left untouched rather than silently dropped.
+func (s *Store) prune(days map[string]DayStat) {
+	if s.retention <= 0 {
+		return
+	}
+	// Keep entries on or after this cutoff date; drop strictly older ones.
+	cutoff := s.now().AddDate(0, 0, -(s.retention - 1)).Format(dateFormat)
+	for k := range days {
+		if _, err := time.Parse(dateFormat, k); err != nil {
+			continue
+		}
+		if k < cutoff {
+			delete(days, k)
+		}
+	}
+}
+
 // read loads and parses the stats file. A missing or empty file is not an
 // error — it returns an initialized, empty document so the first Record just
 // works. A present-but-corrupt file is an error so the user/tests notice.
@@ -181,20 +290,44 @@ func (s *Store) read() (data, error) {
 	if d.Days == nil {
 		d.Days = map[string]DayStat{}
 	}
+	// Migrate a legacy single-day file: an older format stored one day's tally
+	// at the top level (windows/seconds) with no Days map. Fold it into the
+	// per-day map, attributing it to its recorded date or to today if absent.
+	// This is idempotent: once folded and written back, the legacy fields are
+	// gone, and a mixed file (both forms present) merges rather than loses.
+	if d.LegacyWindows != 0 || d.LegacySeconds != 0 {
+		key := d.LegacyDate
+		if key == "" {
+			key = s.now().Format(dateFormat)
+		}
+		day := d.Days[key]
+		day.Windows += d.LegacyWindows
+		day.Seconds += d.LegacySeconds
+		d.Days[key] = day
+		d.LegacyWindows = 0
+		d.LegacySeconds = 0
+		d.LegacyDate = ""
+	}
 	if d.Version == 0 {
 		d.Version = currentVersion
 	}
 	return d, nil
 }
 
-// write persists d atomically: it creates the parent directory if needed,
-// writes to a temp file in the same directory, then renames it over the target
-// so a reader never sees a half-written file.
+// write persists d atomically: it prunes history beyond the retention window,
+// creates the parent directory if needed, writes to a temp file in the same
+// directory, then renames it over the target so a reader never sees a
+// half-written file.
 func (s *Store) write(d data) error {
 	d.Version = currentVersion
 	if d.Days == nil {
 		d.Days = map[string]DayStat{}
 	}
+	// Legacy fields are a read-time migration source only; never persist them.
+	d.LegacyWindows = 0
+	d.LegacySeconds = 0
+	d.LegacyDate = ""
+	s.prune(d.Days)
 	buf, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode stats: %w", err)
