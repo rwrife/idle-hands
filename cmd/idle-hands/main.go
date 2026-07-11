@@ -34,6 +34,10 @@ Commands:
                              CPU activity instead of wrapping a command (for GUI
                              agents / IDE sidebars). Same cards + stats. Linux
                              today; macOS/Windows samplers are a follow-up.
+  signal                     Listen on a local, user-owned socket so non-CLI
+                             agents (IDE/editor/CI/scripts) can POST authoritative
+                             busy/idle events. Same cards + stats.
+  signal busy|idle           Send one busy/idle event to the running listener.
   deck [name]                List decks, or preview one deck's cards.
   preset [name]              List agent presets, or show one preset's tuning.
   stats                      Show reclaimed idle time ("reclaimed X min today").
@@ -77,6 +81,9 @@ Examples:
   idle-hands watch -- claude
   idle-hands watch --preset claude -- claude
   idle-hands watch --process code
+  idle-hands signal
+  idle-hands signal busy
+  idle-hands signal idle
   idle-hands deck
   idle-hands deck duck
   idle-hands deck srs
@@ -141,6 +148,13 @@ func run(args []string) int {
 
 	case "recap":
 		code, err := cmdRecap(rest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
+		}
+		return code
+
+	case "signal":
+		code, err := cmdSignal(rest)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
 		}

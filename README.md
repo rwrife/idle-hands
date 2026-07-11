@@ -106,6 +106,58 @@ wrapped `-- <cmd>` are mutually exclusive.
   platforms. Native samplers (macOS libproc, Windows PDH/Toolhelp) and an
   optional window-title/focus signal are tracked follow-ups.
 
+## Plugin signals (drive busy/idle from any tool)
+
+Wrapped mode and `--process` both *infer* busy/idle. But some agents know their
+own state better than we can guess — an editor extension, a web UI, a CI runner,
+a wrapper script. **Plugin signals** exposes a tiny, local-only endpoint so any
+tool can POST authoritative `busy`/`idle` events and drive the exact same card
+engine, quiet hours, and stats as the watchers.
+
+Start a listener, then send it events:
+
+```sh
+idle-hands signal            # start the listener (Ctrl-C to stop)
+
+# ...from anywhere else (a hook, an extension, a script):
+idle-hands signal busy       # open a BUSY window → one card fires
+idle-hands signal idle       # close it → reclaimed window recorded in stats
+```
+
+`busy` opens a BUSY window (subject to your configured threshold/quiet-hours
+rules); `idle` closes it and records the reclaimed time. Duplicate `busy`/`idle`
+events are **idempotent** — no double-count, no card flicker — so callers can
+fire freely without tracking prior state.
+
+**Wire protocol.** The listener speaks one JSON object per line over the socket:
+
+```json
+{"state":"busy","source":"vscode"}
+{"state":"idle","source":"vscode"}
+```
+
+`source` is optional and used only for logging. A bare word (`busy` / `idle`)
+is also accepted for shell one-liners. Wiring a custom agent is a one-liner on
+each side of its work:
+
+```sh
+# In your agent wrapper: mark busy before the slow call, idle after.
+idle-hands signal busy
+my-agent --do-the-slow-thing
+idle-hands signal idle
+
+# Or talk to the socket directly (no idle-hands binary needed):
+printf '{"state":"busy","source":"my-agent"}\n' | nc -U ~/.idle-hands/signal.sock
+```
+
+**Security — local only, no network.** On Linux/macOS the listener binds a
+Unix domain socket at `~/.idle-hands/signal.sock` with `0600` permissions: it is
+user-owned and never touches the network. A clean shutdown removes the socket
+file, and a stale socket left by a crashed run is detected and replaced on the
+next start. On **Windows** (no Unix sockets), it falls back to a loopback-only
+TCP listener on `127.0.0.1`, publishing its chosen port to
+`~/.idle-hands/signal.port`; this is still local-only by binding to loopback.
+
 ## Build from source
 
 Requires Go 1.23+.
