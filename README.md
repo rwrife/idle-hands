@@ -161,7 +161,9 @@ Two more decks are generated live from *your* context rather than a fixed list:
 **srs** (your own flashcards, one per wait — see
 [Flashcards](#flashcards-spaced-repetition)) and **duckdiff** (one review
 question about your staged `git diff` via a local LLM — see
-[Duck the diff](#duck-the-diff-local-llm-review-question)).
+[Duck the diff](#duck-the-diff-local-llm-review-question)). A third live deck,
+**hook**, runs one of your own commands during the wait and shows its result
+(see [Custom card hooks](#custom-card-hooks-do-real-work-during-the-wait)).
 
 The same card is never shown twice in a row, and each busy window gets exactly
 one. List what you've got, or preview a deck's cards before selecting it:
@@ -306,6 +308,57 @@ duckdiff_timeout = "4s"                                # fall back to duck past 
 Stage something and preview exactly what you'd get with `idle-hands deck
 duckdiff` (it shows the live question, or the fallback and why).
 
+### Custom card hooks (do real work during the wait)
+
+Every other deck asks *you* to do something. A **hook** instead runs one short
+command you registered — `git fetch`, a single fast test, `go vet`, a lint pass
+— the moment a busy window opens, and shows the result as the card. The wait
+does real work instead of just reminding you to move.
+
+```
+╭─ …agent is thinking (24s) ─────────────────────────╮
+│  🪝  ✅ fetch                                        │
+│  ok · Fast-forwarded main to a1b2c3d               │
+╰──────────────────────────────────── one card ──╯
+```
+
+Hooks are **strictly opt-in**: only commands you place in `[[hooks]]` ever run.
+The command is an argv list run directly — nothing is passed through a shell,
+word-split, or glob-expanded — so exactly the program you wrote is what runs.
+
+It is built to **never get in your way**:
+
+- Each run is bounded by **both** the busy window **and** a hard `hook_timeout`
+  (default `10s`), whichever fires first. A hook that outlives the wait is
+  killed.
+- If the agent comes back before the hook finishes, the hook is **cancelled**
+  and no card is shown — the window is just recorded as reclaimed time.
+- The card shows the hook name, a ✅/❌ from the exit code, and the last line of
+  output (truncated). A timeout renders a ❌ `timed out` card.
+- With several hooks configured, idle-hands rotates through them round-robin so
+  each gets a turn across successive waits.
+
+Select it in config and register one or more hooks:
+
+```toml
+deck = "hook"
+hook_timeout = "10s"     # hard ceiling per hook; also cancelled when the agent returns
+
+[[hooks]]
+name = "fetch"
+cmd  = ["git", "fetch", "--quiet"]
+
+[[hooks]]
+name = "vet"
+cmd  = ["go", "vet", "./..."]
+```
+
+> **Safety:** idle-hands only runs the exact commands you list here. It never
+> infers a command, never runs anything through a shell, and never executes
+> arbitrary output from the wrapped agent.
+
+Preview the registered hooks with `idle-hands deck hook`.
+
 ## Config
 
 All optional — with no config file you get the defaults above (the `move` deck,
@@ -313,7 +366,7 @@ a 20s threshold, no quiet hours). Drop a `~/.idle-hands/config.toml` to tune it;
 changes take effect on the next run:
 
 ```toml
-deck = "duck"            # which deck to show: move | duck | tidy | srs | duckdiff | <your-deck>
+deck = "duck"            # which deck to show: move | duck | tidy | srs | duckdiff | hook | <your-deck>
 busy_threshold = "30s"  # how long output must stay quiet before a card fires
 
 [quiet_hours]           # suppress cards during these local hours (optional)
@@ -334,6 +387,11 @@ model, default `llama3.2`), `duckdiff_url` (the Ollama endpoint), and
 `duckdiff_timeout` (how long to wait before falling back to the static duck
 deck, default `4s`). See
 [Duck the diff](#duck-the-diff-local-llm-review-question) above.
+
+The **hook** deck adds `hook_timeout` (the hard per-hook ceiling, default `10s`)
+and one or more `[[hooks]]` blocks — each with a `name` and an argv `cmd`. Only
+the commands you list here ever run; see
+[Custom card hooks](#custom-card-hooks-do-real-work-during-the-wait) above.
 
 ## Stats
 

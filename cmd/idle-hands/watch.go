@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/rwrife/idle-hands/internal/deck"
 	"github.com/rwrife/idle-hands/internal/detect"
 	"github.com/rwrife/idle-hands/internal/duckdiff"
+	"github.com/rwrife/idle-hands/internal/hook"
 	"github.com/rwrife/idle-hands/internal/preset"
 	"github.com/rwrife/idle-hands/internal/srs"
 	"github.com/rwrife/idle-hands/internal/store"
@@ -339,6 +341,34 @@ func newCardRenderer(cfg config.Config) *card.Renderer {
 			fmt.Fprintf(os.Stderr, "idle-hands: duckdiff → %s; showing the static duck deck\n", res.Reason)
 		}
 		return card.NewRenderer(os.Stderr, card.Options{Deck: res.Deck})
+	}
+
+	if cfg.Deck == hook.DeckName {
+		hd, err := hook.LoadDeck(hook.Options{
+			Specs:   cfg.Hooks.Specs,
+			Timeout: cfg.Hooks.Timeout,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "idle-hands: hook deck unavailable (%v); using plain notices\n", err)
+			return nil
+		}
+		// The hook deck has no static cards; render a one-card placeholder while
+		// the hook runs, then swap in the result via the async producer.
+		placeholder := deck.Deck{
+			Name:  hook.DeckName,
+			Emoji: hd.Emoji(),
+			Cards: []deck.Card{{Title: "running a hook…", Text: "doing real work while you wait"}},
+		}
+		return card.NewRenderer(os.Stderr, card.Options{
+			Deck: placeholder,
+			Async: func(ctx context.Context) (deck.Card, bool) {
+				res := hd.Run(ctx)
+				if res.Cancelled {
+					return deck.Card{}, false
+				}
+				return res.Card, true
+			},
+		})
 	}
 
 	userDir, err := config.DecksDir()

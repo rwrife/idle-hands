@@ -8,6 +8,7 @@ import (
 	"github.com/rwrife/idle-hands/internal/config"
 	"github.com/rwrife/idle-hands/internal/deck"
 	"github.com/rwrife/idle-hands/internal/duckdiff"
+	"github.com/rwrife/idle-hands/internal/hook"
 	"github.com/rwrife/idle-hands/internal/srs"
 )
 
@@ -33,11 +34,13 @@ func cmdDeck(args []string) (int, error) {
 	// per-deck settings.
 	var srsCfg config.SRSConfig
 	var duckCfg config.DuckDiffConfig
+	var hooksCfg config.HooksConfig
 	if cfg, err := config.Load(); err == nil {
 		srsCfg = cfg.SRS
 		duckCfg = cfg.DuckDiff
+		hooksCfg = cfg.Hooks
 	}
-	return runDeck(stdout, dir, srsCfg, duckCfg, args)
+	return runDeck(stdout, dir, srsCfg, duckCfg, hooksCfg, args)
 }
 
 // runDeck is the testable core. userDir is the directory user decks are loaded
@@ -45,12 +48,12 @@ func cmdDeck(args []string) (int, error) {
 // path (empty when unconfigured); duckCfg carries the duckdiff model/url/timeout
 // (all optional). With no args it lists decks; with one arg it previews that
 // deck; more than one arg is a usage error.
-func runDeck(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg config.DuckDiffConfig, args []string) (int, error) {
+func runDeck(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg config.DuckDiffConfig, hooksCfg config.HooksConfig, args []string) (int, error) {
 	switch len(args) {
 	case 0:
-		return listDecks(w, userDir, srsCfg, duckCfg)
+		return listDecks(w, userDir, srsCfg, duckCfg, hooksCfg)
 	case 1:
-		return previewDeck(w, userDir, srsCfg, duckCfg, args[0])
+		return previewDeck(w, userDir, srsCfg, duckCfg, hooksCfg, args[0])
 	default:
 		return 2, fmt.Errorf("deck: too many arguments (usage: idle-hands deck [name])")
 	}
@@ -61,7 +64,7 @@ func runDeck(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg confi
 // same name are flagged so the override is never a surprise. When an srs card
 // source is configured, the flashcard deck is appended too (loaded live) so the
 // listing matches what watch would show.
-func listDecks(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg config.DuckDiffConfig) (int, error) {
+func listDecks(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg config.DuckDiffConfig, hooksCfg config.HooksConfig) (int, error) {
 	cat, err := deck.Catalog(userDir)
 	if err != nil {
 		return 1, fmt.Errorf("deck: %w", err)
@@ -83,6 +86,9 @@ func listDecks(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg con
 	}
 	if len(duckdiff.DeckName) > nameW {
 		nameW = len(duckdiff.DeckName)
+	}
+	if len(hook.DeckName) > nameW {
+		nameW = len(hook.DeckName)
 	}
 
 	for _, e := range cat {
@@ -122,6 +128,20 @@ func listDecks(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg con
 		duckDeckEmoji, nameW, duckdiff.DeckName, "[live]",
 		"One review question about your staged diff (local LLM); falls back to duck.")
 
+	// List the hook deck when hooks are configured: it runs one registered
+	// command per wait and shows the result. Without [[hooks]] there's nothing
+	// to run, so we note that instead of offering an empty deck.
+	if len(hooksCfg.Specs) > 0 {
+		fmt.Fprintf(w, "  %s  %-*s  %-8s  %s — %s\n",
+			hookDeckEmoji, nameW, hook.DeckName, "[live]",
+			countNoun(len(hooksCfg.Specs), "hook", "hooks"),
+			"Runs one of your [[hooks]] each wait and shows its result.")
+	} else {
+		fmt.Fprintf(w, "  %s  %-*s  %-8s  0 hooks — %s\n",
+			hookDeckEmoji, nameW, hook.DeckName, "[live]",
+			"Add [[hooks]] to config.toml to run commands during the wait.")
+	}
+
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Preview one with `idle-hands deck <name>`; select one in ~/.idle-hands/config.toml.")
 	if userDir != "" {
@@ -135,12 +155,28 @@ func listDecks(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg con
 // even before the deck is loaded live.
 const duckDeckEmoji = "🦆"
 
+// hookDeckEmoji flavors the hook row/preview, matching internal/hook's deck
+// emoji without exporting it.
+const hookDeckEmoji = "🪝"
+
 // previewDeck prints every card in the named deck, in order, with its source.
 // This is the "see exactly what I'll get" view; it resolves user decks over
 // built-ins just as watch does, and handles the special "srs" and "duckdiff"
 // names by loading them live (the configured flashcard source; a question
 // generated from the staged diff), so the preview always matches runtime.
-func previewDeck(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg config.DuckDiffConfig, name string) (int, error) {
+func previewDeck(w io.Writer, userDir string, srsCfg config.SRSConfig, duckCfg config.DuckDiffConfig, hooksCfg config.HooksConfig, name string) (int, error) {
+	if name == hook.DeckName {
+		hd, err := hook.LoadDeck(hook.Options{Specs: hooksCfg.Specs, Timeout: hooksCfg.Timeout})
+		if err != nil {
+			return 1, fmt.Errorf("deck: %w", err)
+		}
+		fmt.Fprintf(w, "idle-hands 🙌 — deck %q [live hooks]:\n\n", hook.DeckName)
+		for _, n := range hd.Names() {
+			fmt.Fprintf(w, "  %s  %s — runs each wait, shows ✅/❌ and last output line\n", hookDeckEmoji, n)
+		}
+		return 0, nil
+	}
+
 	if name == srs.DeckName {
 		d, err := srs.LoadDeck(srsCfg.Source)
 		if err != nil {

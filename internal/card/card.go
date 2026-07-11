@@ -12,6 +12,7 @@
 package card
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math/rand"
@@ -213,13 +214,22 @@ type Renderer struct {
 	// deterministically instead of sleeping. nil selects time.AfterFunc.
 	newTimer func(time.Duration, func()) revealTimer
 
-	mu       sync.Mutex // guards the fields below (timer runs on its own goroutine)
+	// async, when non-nil, makes OnBusy show a placeholder card immediately and
+	// then run async in a goroutine (bounded by a context cancelled on OnIdle)
+	// to produce the real card, redrawing it in place. It is how the "hook" deck
+	// runs a command during the wait and shows its result. nil disables async
+	// behavior (the static and reveal decks). See AsyncCard.
+	async AsyncCard
+
+	mu       sync.Mutex // guards the fields below (timer/goroutine run concurrently)
 	shown    bool       // a card is currently on screen for this BUSY window
 	lastLine int        // number of lines the rendered card spanned (for erase)
 	cur      deck.Card  // the card currently displayed (for the reveal redraw)
 	curIdle  time.Duration
-	revealed bool        // whether cur's answer is already showing
-	timer    revealTimer // pending reveal timer, if any
+	revealed bool               // whether cur's answer is already showing
+	timer    revealTimer        // pending reveal timer, if any
+	cancel   context.CancelFunc // cancels the in-flight async producer, if any
+	gen      uint64             // BUSY-window generation, to ignore stale async results
 }
 
 // revealTimer is the tiny slice of *time.Timer the renderer needs, so tests can
@@ -227,6 +237,14 @@ type Renderer struct {
 type revealTimer interface {
 	Stop() bool
 }
+
+// AsyncCard produces the card to show for a BUSY window, doing whatever work
+// the deck needs (e.g. running a hook command) bounded by ctx. ctx is cancelled
+// when the agent returns (OnIdle), so a slow producer stops promptly. The
+// second return value reports whether a card should be shown at all: false
+// means "produced nothing" (e.g. the window was cancelled before the hook
+// finished), and the placeholder is simply cleared with no replacement.
+type AsyncCard func(ctx context.Context) (card deck.Card, show bool)
 
 // Options configure a Renderer.
 type Options struct {
@@ -249,6 +267,11 @@ type Options struct {
 	// newTimer overrides the reveal timer constructor for tests. nil selects
 	// time.AfterFunc. Unexported so it isn't part of the public surface.
 	newTimer func(time.Duration, func()) revealTimer
+	// Async, when non-nil, drives the "hook" deck: OnBusy shows Deck's picked
+	// card as a placeholder, then runs Async in a goroutine (bounded by a
+	// context cancelled on OnIdle) and redraws the returned card in place. When
+	// set, Deck should be a one-card placeholder deck (e.g. "…running hook").
+	Async AsyncCard
 }
 
 // defaultWidth is the card box width when none is supplied. Comfortable in an
@@ -283,6 +306,7 @@ func NewRenderer(w io.Writer, opts Options) *Renderer {
 		width:    width,
 		reveal:   reveal,
 		newTimer: newTimer,
+		async:    opts.Async,
 	}
 }
 
@@ -309,11 +333,47 @@ func (r *Renderer) OnBusy(idleFor time.Duration) {
 	r.revealed = !(r.reveal > 0 && strings.TrimSpace(c.Text) != "")
 	r.draw()
 	r.shown = true
+	r.gen++
+
+	if r.async != nil {
+		// Hook deck: the placeholder is on screen; run the producer bounded by a
+		// context we cancel on OnIdle, then redraw its result in place.
+		ctx, cancel := context.WithCancel(context.Background())
+		r.cancel = cancel
+		gen := r.gen
+		go r.runAsync(ctx, gen)
+		return
+	}
 
 	if !r.revealed {
 		// Schedule the non-blocking answer reveal.
 		r.timer = r.newTimer(r.reveal, r.doReveal)
 	}
+}
+
+// runAsync invokes the async producer (outside the lock, since it may block on
+// a subprocess) and, if this BUSY window is still the current one, redraws the
+// produced card in place. A card produced for a window that already ended
+// (agent came back, gen advanced) is discarded so a late result never scribbles
+// over a cleared screen or the next window's card.
+func (r *Renderer) runAsync(ctx context.Context, gen uint64) {
+	c, show := r.async(ctx)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.shown || r.gen != gen {
+		return // window ended or moved on; drop the stale result
+	}
+	fmt.Fprint(r.w, r.clearSeq()) // erase the placeholder frame
+	if !show {
+		// Producer had nothing to show (e.g. cancelled). Leave the placeholder
+		// cleared; OnIdle will print the "agent's back" line.
+		r.lastLine = 0
+		return
+	}
+	r.cur = c
+	r.revealed = true
+	r.draw()
 }
 
 // doReveal is the timer callback that flips the current card to its answered
@@ -353,6 +413,11 @@ func (r *Renderer) OnIdle(reclaimed time.Duration) {
 		r.timer.Stop() // don't let a pending reveal fire after we clear
 		r.timer = nil
 	}
+	if r.cancel != nil {
+		r.cancel() // stop any in-flight async producer (hook command)
+		r.cancel = nil
+	}
+	r.gen++ // invalidate any async result still in flight for the old window
 	if r.shown {
 		fmt.Fprint(r.w, r.clearSeq())
 	}

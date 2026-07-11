@@ -51,6 +51,13 @@ const DefaultSRSSpacing = 3
 // duckdiff.DefaultTimeout (kept as a literal here to avoid a dependency cycle).
 const DefaultDuckDiffTimeout = 4 * time.Second
 
+// DefaultHookTimeout bounds a single hook command when config sets no
+// hook_timeout. It is short enough to comfortably finish inside a typical
+// think window; a hook still gets cancelled the moment the window ends, so this
+// is only the hard ceiling for a hook that outlives the wait. It mirrors
+// hook.DefaultTimeout (kept as a literal here to avoid a dependency cycle).
+const DefaultHookTimeout = 10 * time.Second
+
 // dirName / fileName are the on-disk locations under the user's home directory.
 const (
 	dirName   = ".idle-hands"
@@ -78,6 +85,35 @@ type Config struct {
 	// DuckDiff holds the diff-review-deck settings, used only when Deck ==
 	// "duckdiff".
 	DuckDiff DuckDiffConfig
+	// Hooks holds the user-registered hook commands, used only when Deck ==
+	// "hook". Empty when no [[hooks]] blocks are configured.
+	Hooks HooksConfig
+}
+
+// HooksConfig holds the registered hook commands and the shared per-hook
+// timeout for the "hook" deck. It is only consulted when Deck is "hook"; for
+// any other deck these fields are ignored. Hooks are strictly opt-in: with no
+// [[hooks]] blocks, Specs is empty and selecting deck = "hook" is an error the
+// watch layer surfaces (there is nothing to run).
+type HooksConfig struct {
+	// Specs are the registered hooks, in config order. A hook deck runs one of
+	// these per BUSY window (round-robin, like the other decks pick a card).
+	Specs []HookSpec
+	// Timeout is the hard ceiling for a single hook command. <= 0 is treated as
+	// DefaultHookTimeout by consumers. A hook is also cancelled when the BUSY
+	// window ends, whichever comes first.
+	Timeout time.Duration
+}
+
+// HookSpec is one registered hook: a display name and the command (argv) to
+// run. Both are required. The command is never a shell string — it is an argv
+// slice run directly — so nothing is word-split or glob-expanded and only the
+// exact user-configured program runs.
+type HookSpec struct {
+	// Name labels the hook on its card (e.g. "fetch"). Required, unique.
+	Name string
+	// Cmd is the argv to execute (Cmd[0] is the program). Required, non-empty.
+	Cmd []string
 }
 
 // DuckDiffConfig tunes the "duckdiff" deck: which local Ollama model to ask for
@@ -141,6 +177,14 @@ type fileConfig struct {
 	DuckDiffModel string         `toml:"duckdiff_model"`
 	DuckDiffURL   string         `toml:"duckdiff_url"`
 	DuckDiffTO    string         `toml:"duckdiff_timeout"`
+	HookTimeout   string         `toml:"hook_timeout"`
+	Hooks         []fileHook     `toml:"hooks"`
+}
+
+// fileHook is the wire shape of one [[hooks]] block.
+type fileHook struct {
+	Name string   `toml:"name"`
+	Cmd  []string `toml:"cmd"`
 }
 
 type fileQuietHours struct {
@@ -162,6 +206,9 @@ func Default() Config {
 		},
 		DuckDiff: DuckDiffConfig{
 			Timeout: DefaultDuckDiffTimeout,
+		},
+		Hooks: HooksConfig{
+			Timeout: DefaultHookTimeout,
 		},
 	}
 }
@@ -264,7 +311,48 @@ func Parse(data []byte) (Config, error) {
 		return Config{}, err
 	}
 
+	if err := applyHooks(&cfg, fc); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
+}
+
+// applyHooks resolves the hook-deck settings onto cfg. A blank hook_timeout
+// keeps the default; a present one must be a positive duration. Each [[hooks]]
+// block must have a non-empty name and a non-empty cmd; names must be unique.
+// Malformed hook config is a real error (consistent with the strict config
+// behavior elsewhere) so a typo isn't silently ignored. Having zero hooks is
+// not itself an error here — deck != "hook" configs must not be rejected for an
+// empty hooks list; the watch layer errors only when deck = "hook" and there
+// are no hooks to run.
+func applyHooks(cfg *Config, fc fileConfig) error {
+	if v := strings.TrimSpace(fc.HookTimeout); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("hook_timeout %q: %w", v, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("hook_timeout must be positive, got %q", v)
+		}
+		cfg.Hooks.Timeout = d
+	}
+	seen := make(map[string]struct{}, len(fc.Hooks))
+	for i, h := range fc.Hooks {
+		name := strings.TrimSpace(h.Name)
+		if name == "" {
+			return fmt.Errorf("hooks[%d]: name is required", i)
+		}
+		if len(h.Cmd) == 0 || strings.TrimSpace(h.Cmd[0]) == "" {
+			return fmt.Errorf("hooks[%d] (%q): cmd is required and its first element must be a program", i, name)
+		}
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("duplicate hook name %q", name)
+		}
+		seen[name] = struct{}{}
+		cfg.Hooks.Specs = append(cfg.Hooks.Specs, HookSpec{Name: name, Cmd: append([]string(nil), h.Cmd...)})
+	}
+	return nil
 }
 
 // applySRS resolves the flashcard-deck settings onto cfg. The source path is
