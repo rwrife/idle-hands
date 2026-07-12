@@ -14,7 +14,7 @@ import (
 // a listener under a temp HOME, connect as the CLI client would, send a busy
 // then an idle event, and confirm both are decoded and dispatched in order.
 func TestListenAndServe(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortTempHome(t))
 
 	ln, err := Listen()
 	if err != nil {
@@ -84,7 +84,7 @@ func TestListenAndServe(t *testing.T) {
 // file with no live listener behind it must be detected as stale and replaced,
 // so a restart after a crash succeeds instead of failing with EADDRINUSE.
 func TestStaleSocketReplaced(t *testing.T) {
-	home := t.TempDir()
+	home := shortTempHome(t)
 	t.Setenv("HOME", home)
 
 	dir := filepath.Join(home, ".idle-hands")
@@ -117,7 +117,7 @@ func TestStaleSocketReplaced(t *testing.T) {
 // TestListenRejectsSecondInstance ensures we never steal a socket that another
 // live listener owns.
 func TestListenRejectsSecondInstance(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shortTempHome(t))
 
 	ln, err := Listen()
 	if err != nil {
@@ -128,6 +128,21 @@ func TestListenRejectsSecondInstance(t *testing.T) {
 	if _, err := Listen(); err == nil {
 		t.Fatal("second Listen should fail while the first is live")
 	}
+}
+
+// shortTempHome returns a temp HOME under a short base path. macOS places
+// t.TempDir() under a deep /var/folders/... path, and a Unix socket bound
+// beneath it can exceed the ~104-byte sun_path limit, failing the bind with
+// "invalid argument". Rooting HOME under os.TempDir() (/tmp) keeps the
+// resulting signal.sock path safely short on every platform.
+func shortTempHome(t *testing.T) string {
+	t.Helper()
+	home, err := os.MkdirTemp(os.TempDir(), "ih")
+	if err != nil {
+		t.Fatalf("mkdir temp home: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	return home
 }
 
 func waitFor(t *testing.T, cond func() bool) {
