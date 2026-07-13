@@ -13,6 +13,7 @@ import (
 	"github.com/rwrife/idle-hands/internal/deck"
 	"github.com/rwrife/idle-hands/internal/detect"
 	"github.com/rwrife/idle-hands/internal/duckdiff"
+	"github.com/rwrife/idle-hands/internal/focus"
 	"github.com/rwrife/idle-hands/internal/hook"
 	"github.com/rwrife/idle-hands/internal/preset"
 	"github.com/rwrife/idle-hands/internal/srs"
@@ -39,6 +40,18 @@ type watchEnv struct {
 	quiet      config.QuietHours
 	now        func() time.Time
 	suppressed bool
+
+	// focus is the focus-safe-mode state store (nil when unavailable). When a
+	// focus block is active, cards are suppressed even outside quiet hours.
+	focus *focus.Store
+	// focusSuppressStats mirrors config focus_safe.suppress_stats: when true, a
+	// window suppressed by an active focus block is not recorded to stats.
+	focusSuppressStats bool
+	// focusActive records whether the in-flight BUSY window was suppressed by an
+	// active focus block, so the matching IDLE transition can honor
+	// focusSuppressStats without re-checking the clock (which may have advanced
+	// past the focus deadline mid-window).
+	focusActive bool
 }
 
 // newWatchEnv builds the shared runtime environment both watch modes use: the
@@ -54,11 +67,20 @@ func newWatchEnv(cfg config.Config) *watchEnv {
 		fmt.Fprintf(os.Stderr, "idle-hands: stats unavailable (%v); not recording\n", err)
 		st = nil
 	}
+	foc, err := focus.New(focus.Options{})
+	if err != nil {
+		// Focus-safe mode is a nicety; if its store can't be opened, warn once
+		// and carry on wrapping the agent without focus suppression.
+		fmt.Fprintf(os.Stderr, "idle-hands: focus-safe mode unavailable (%v); cards will show normally\n", err)
+		foc = nil
+	}
 	return &watchEnv{
-		renderer: renderer,
-		store:    st,
-		quiet:    cfg.Quiet,
-		now:      time.Now,
+		renderer:           renderer,
+		store:              st,
+		quiet:              cfg.Quiet,
+		now:                time.Now,
+		focus:              foc,
+		focusSuppressStats: cfg.FocusSafe.SuppressStats,
 	}
 }
 
@@ -400,6 +422,15 @@ func newBufRenderer(w io.Writer, d deck.Deck) *card.Renderer {
 func handleState(ev detect.Event, env *watchEnv) {
 	switch ev.State {
 	case detect.StateBusy:
+		// Focus-safe mode: while a focus block is active, hush the card even
+		// outside quiet hours. The window is still recorded on IDLE unless
+		// focus_safe.suppress_stats opts out.
+		if env.focusActiveNow() {
+			env.focusActive = true
+			env.suppressed = true // keep IDLE equally silent on screen
+			return
+		}
+		env.focusActive = false
 		if env.quiet.Contains(env.now()) {
 			env.suppressed = true // remember so IDLE stays silent too
 			return                // quiet hours: suppress the card entirely
@@ -412,14 +443,21 @@ func handleState(ev detect.Event, env *watchEnv) {
 		env.renderer.OnBusy(ev.IdleFor)
 	case detect.StateIdle:
 		// Record the just-ended window regardless of whether a card was shown,
-		// so quiet-hours windows still count toward reclaimed time.
-		if env.store != nil {
+		// so quiet-hours windows still count toward reclaimed time. The one
+		// exception is a focus-block window when focus_safe.suppress_stats is
+		// set: that window is excluded from the tally entirely.
+		record := env.store != nil
+		if env.focusActive && env.focusSuppressStats {
+			record = false
+		}
+		if record {
 			if err := env.store.Record(ev.IdleFor); err != nil {
 				fmt.Fprintf(os.Stderr, "idle-hands: could not record stats (%v)\n", err)
 			}
 		}
-		// If this window's card was suppressed by quiet hours, the screen never
-		// changed, so say nothing now either.
+		env.focusActive = false
+		// If this window's card was suppressed (quiet hours or focus), the
+		// screen never changed, so say nothing now either.
 		if env.suppressed {
 			env.suppressed = false
 			return
@@ -430,6 +468,21 @@ func handleState(ev detect.Event, env *watchEnv) {
 		}
 		env.renderer.OnIdle(ev.IdleFor)
 	}
+}
+
+// focusActiveNow reports whether a focus block is currently active. A missing
+// or unreadable focus file is treated as "no focus" so a transient read error
+// never wrongly hushes cards; the read happens per BUSY transition so a focus
+// block set mid-session takes effect on the next window without a restart.
+func (env *watchEnv) focusActiveNow() bool {
+	if env.focus == nil {
+		return false
+	}
+	state, err := env.focus.Get()
+	if err != nil {
+		return false
+	}
+	return state.Active(env.now())
 }
 
 // reportBusyPlain prints the plain one-line BUSY notice. It is the fallback

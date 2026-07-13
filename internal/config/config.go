@@ -88,6 +88,18 @@ type Config struct {
 	// Hooks holds the user-registered hook commands, used only when Deck ==
 	// "hook". Empty when no [[hooks]] blocks are configured.
 	Hooks HooksConfig
+	// FocusSafe holds the focus-safe-mode settings.
+	FocusSafe FocusSafeConfig
+}
+
+// FocusSafeConfig tunes focus-safe mode (the `idle-hands focus` command). By
+// default a focus block only suppresses the on-screen card while still counting
+// reclaimed windows toward stats; set SuppressStats to exclude focus-block
+// windows from the reclaimed tally as well.
+type FocusSafeConfig struct {
+	// SuppressStats, when true, stops focus-block windows from being recorded
+	// to the stats store. Default false: focus suppresses only the card.
+	SuppressStats bool
 }
 
 // HooksConfig holds the registered hook commands and the shared per-hook
@@ -179,6 +191,12 @@ type fileConfig struct {
 	DuckDiffTO    string         `toml:"duckdiff_timeout"`
 	HookTimeout   string         `toml:"hook_timeout"`
 	Hooks         []fileHook     `toml:"hooks"`
+	FocusSafe     fileFocusSafe  `toml:"focus_safe"`
+}
+
+// fileFocusSafe is the wire shape of the [focus_safe] block.
+type fileFocusSafe struct {
+	SuppressStats bool `toml:"suppress_stats"`
 }
 
 // fileHook is the wire shape of one [[hooks]] block.
@@ -326,6 +344,8 @@ func Parse(data []byte) (Config, error) {
 	if err := applyHooks(&cfg, fc); err != nil {
 		return Config{}, err
 	}
+
+	cfg.FocusSafe.SuppressStats = fc.FocusSafe.SuppressStats
 
 	return cfg, nil
 }
