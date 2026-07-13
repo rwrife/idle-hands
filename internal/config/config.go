@@ -223,6 +223,18 @@ func Path() (string, error) {
 	return filepath.Join(home, dirName, fileName), nil
 }
 
+// DirPath returns the absolute path to the idle-hands state directory
+// (~/.idle-hands) using the OS user home directory. It is the parent of the
+// config file, user decks, stats store, and the plugin-signal socket; the
+// directory need not already exist.
+func DirPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate home directory: %w", err)
+	}
+	return filepath.Join(home, dirName), nil
+}
+
 // DecksDir returns the absolute path to the user deck directory
 // (~/.idle-hands/decks) using the OS user home directory. It is where user
 // decks (*.toml) are loaded from; the directory need not exist.
