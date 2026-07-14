@@ -211,7 +211,7 @@ func TestNewCardRendererDuckDiffFallsBack(t *testing.T) {
 	// the non-git dir means we shouldn't reach the model at all.
 	cfg.DuckDiff.Timeout = 200 * time.Millisecond
 
-	r := newCardRenderer(cfg)
+	r := newCardRenderer(cfg, nil)
 	if r == nil {
 		t.Fatal("newCardRenderer(duckdiff) = nil, want a fallback renderer")
 	}
