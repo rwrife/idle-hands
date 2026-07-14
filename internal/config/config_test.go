@@ -352,3 +352,23 @@ func TestDecksDir(t *testing.T) {
 		t.Errorf("DecksDir() = %q, want %q", got, want)
 	}
 }
+
+// TestParseFocusSafe covers the focus_safe.suppress_stats key: default false,
+// settable to true, and unaffected for configs that omit the block.
+func TestParseFocusSafe(t *testing.T) {
+	def, err := Parse([]byte("deck = \"move\"\n"))
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	if def.FocusSafe.SuppressStats {
+		t.Errorf("FocusSafe.SuppressStats default = true, want false")
+	}
+
+	got, err := Parse([]byte("[focus_safe]\nsuppress_stats = true\n"))
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	if !got.FocusSafe.SuppressStats {
+		t.Errorf("FocusSafe.SuppressStats = false, want true")
+	}
+}

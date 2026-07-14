@@ -10,6 +10,7 @@ import (
 	"github.com/rwrife/idle-hands/internal/config"
 	"github.com/rwrife/idle-hands/internal/deck"
 	"github.com/rwrife/idle-hands/internal/detect"
+	"github.com/rwrife/idle-hands/internal/focus"
 	"github.com/rwrife/idle-hands/internal/store"
 )
 
@@ -40,6 +41,82 @@ func testEnv(t *testing.T, quiet config.QuietHours, now func() time.Time) (*watc
 		t.Fatal(err)
 	}
 	return &watchEnv{renderer: r, store: st, quiet: quiet, now: now}, &buf, st
+}
+
+// TestHandleStateFocusSuppressesButRecords verifies an active focus block hushes
+// the card (like quiet hours) while still recording the reclaimed window by
+// default (focus_safe.suppress_stats unset).
+func TestHandleStateFocusSuppressesButRecords(t *testing.T) {
+	day := time.Date(2026, 6, 29, 12, 0, 0, 0, time.Local) // midday, no quiet
+	now := func() time.Time { return day }
+	env, buf, st := testEnv(t, config.QuietHours{}, now)
+
+	// Attach an active focus block (ends an hour from now).
+	fpath := filepath.Join(t.TempDir(), "focus.json")
+	fs, err := focus.New(focus.Options{Path: fpath, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.Set(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	env.focus = fs
+
+	handleState(busyEvent(20*time.Second), env)
+	handleState(idleEvent(50*time.Second), env)
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no card output during focus block, got:\n%q", buf.String())
+	}
+	today, err := st.Today()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if today.Windows != 1 || today.Seconds != 50 {
+		t.Errorf("focus window not recorded: %+v, want {1 50}", today)
+	}
+}
+
+// TestHandleStateFocusSuppressStatsExcludesWindow verifies that with
+// focus_safe.suppress_stats set, a focus-block window is neither shown nor
+// counted, while an expired focus block leaves normal behavior intact.
+func TestHandleStateFocusSuppressStatsExcludesWindow(t *testing.T) {
+	day := time.Date(2026, 6, 29, 12, 0, 0, 0, time.Local)
+	now := func() time.Time { return day }
+	env, buf, st := testEnv(t, config.QuietHours{}, now)
+	env.focusSuppressStats = true
+
+	fpath := filepath.Join(t.TempDir(), "focus.json")
+	fs, _ := focus.New(focus.Options{Path: fpath, Now: now})
+	if _, err := fs.Set(30 * time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	env.focus = fs
+
+	handleState(busyEvent(20*time.Second), env)
+	handleState(idleEvent(50*time.Second), env)
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no card output during focus block, got:\n%q", buf.String())
+	}
+	today, _ := st.Today()
+	if today.Windows != 0 || today.Seconds != 0 {
+		t.Errorf("suppress_stats focus window should not record: %+v, want {0 0}", today)
+	}
+
+	// Clear focus: a subsequent window renders and records normally.
+	if err := fs.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	handleState(busyEvent(20*time.Second), env)
+	handleState(idleEvent(40*time.Second), env)
+	if buf.Len() == 0 {
+		t.Error("expected card output after focus cleared, got none")
+	}
+	today, _ = st.Today()
+	if today.Windows != 1 || today.Seconds != 40 {
+		t.Errorf("post-focus window record = %+v, want {1 40}", today)
+	}
 }
 
 func busyEvent(idle time.Duration) detect.Event {

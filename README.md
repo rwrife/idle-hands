@@ -424,6 +424,9 @@ busy_threshold = "30s"  # how long output must stay quiet before a card fires
 [quiet_hours]           # suppress cards during these local hours (optional)
 start = "22:00"         # cards are withheld 22:00 → 07:00; the agent is still
 end   = "07:00"         # wrapped and reclaimed time is still tallied
+
+[focus_safe]            # `idle-hands focus` behavior (optional)
+suppress_stats = false  # true also excludes focus-block windows from stats
 ```
 
 Quiet-hours ranges may wrap past midnight (e.g. `22:00`→`07:00`). An unknown key
@@ -444,6 +447,34 @@ The **hook** deck adds `hook_timeout` (the hard per-hook ceiling, default `10s`)
 and one or more `[[hooks]]` blocks — each with a `name` and an argv `cmd`. Only
 the commands you list here ever run; see
 [Custom card hooks](#custom-card-hooks-do-real-work-during-the-wait) above.
+
+## Focus-safe mode
+
+Even when the agent is busy, sometimes you're mid-thought and a card is an
+interruption, not a gift. `idle-hands focus` hushes cards for a window you
+choose while still detecting and (by default) counting the reclaimed time, so a
+deep-focus block costs you the cards but not the scoreboard:
+
+```bash
+$ idle-hands focus 25m        # hush cards for 25 minutes
+idle-hands 🎯 — focus-safe mode on for 25 min (until 14:05). Cards hushed; reclaimed time still counts.
+
+$ idle-hands focus            # how much focus time is left?
+idle-hands 🎯 — focus-safe mode on: 18 min left (until 14:05).
+
+$ idle-hands focus off        # back to normal; cards show again
+idle-hands 🎯 — focus-safe mode off; cards will show again.
+```
+
+The duration accepts any Go duration (`25m`, `1h30m`, `90s`). The focus-until
+timestamp is stored in `~/.idle-hands/focus.json`, so a block survives restarts
+and outlives the `watch` process — start focus in one terminal and every
+`idle-hands watch` respects it until it expires or you clear it. A block set
+mid-session takes effect on the next busy window without restarting `watch`.
+
+By default focus suppresses only the on-screen card; reclaimed windows still
+count toward `stats` and `recap`. Set `focus_safe.suppress_stats = true` to
+exclude focus-block windows from the tally entirely.
 
 ## Stats
 

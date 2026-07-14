@@ -43,6 +43,9 @@ Commands:
   stats                      Show reclaimed idle time ("reclaimed X min today").
   recap [--weekly]           Roundup: today + rolling-7-day reclaimed time and
                              your current streak. --weekly adds a per-day view.
+  focus [<dur>|off]          Focus-safe mode: hush cards for a window (e.g.
+                             focus 25m) while still counting reclaimed time.
+                             No args reports remaining; "off" clears it.
   version                    Print the build version.
   help                       Show this help.
 
@@ -52,6 +55,8 @@ Config (optional): ~/.idle-hands/config.toml
   [quiet_hours]           # suppress cards during these local hours
   start = "22:00"
   end   = "07:00"
+  [focus_safe]            # focus-safe mode behavior
+  suppress_stats = false  # true also excludes focus windows from stats
 
 User decks (optional): ~/.idle-hands/decks/*.toml
   Drop your own deck files there; they're listed by the deck command and
@@ -93,6 +98,9 @@ Examples:
   idle-hands stats
   idle-hands recap
   idle-hands recap --weekly
+  idle-hands focus 25m
+  idle-hands focus
+  idle-hands focus off
   idle-hands version
 `
 
@@ -148,6 +156,13 @@ func run(args []string) int {
 
 	case "recap":
 		code, err := cmdRecap(rest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
+		}
+		return code
+
+	case "focus":
+		code, err := cmdFocus(rest)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
 		}
