@@ -301,6 +301,52 @@ text = "Is this the most important thing, or just the loudest?"
 Select it in config (`deck = "focus"`). A malformed deck file is reported loudly
 rather than silently skipped, so a typo never just vanishes.
 
+### Team decks (repo-local)
+
+A team can commit shared decks straight into their repo — onboarding tips,
+internal links, review reminders — so `idle-hands` surfaces team-specific cards
+during waits with **zero central service, just a file in the repo**.
+
+Drop `*.toml` files under `.idle-hands/decks/` anywhere in your project.
+`idle-hands` walks **up** from your working directory (like git finds its
+config) and loads every `.idle-hands/decks/*.toml` it finds:
+
+```toml
+# .idle-hands/decks/onboarding.toml  (committed to the repo)
+name = "onboarding"
+description = "New-hire tips for this repo."
+emoji = "🧭"
+
+[[cards]]
+title = "Read the runbook"
+text = "Skim docs/runbook.md — it explains our deploy flow."
+
+[[cards]]
+title = "Ask in #eng-help"
+text = "Stuck for >15 min? Drop it in #eng-help, someone's around."
+```
+
+Repo decks are **namespaced by filename**, so `onboarding.toml` becomes the
+deck `onboarding` and `idle-hands deck` labels its source as `[repo]` (vs
+`[user]` for `~/.idle-hands/decks` and `[built-in]`). Selecting it is the same
+as any deck: `deck = "onboarding"` in config.
+
+Precedence, highest to lowest:
+
+1. an explicit `--deck` flag
+2. **repo** decks (`.idle-hands/decks`, nearest directory wins)
+3. **user** decks (`~/.idle-hands/decks`)
+4. **built-in** decks
+
+A malformed team deck logs a warning and is skipped — it never crashes a
+`watch` session. Repo discovery is on by default; disable it to load only your
+own user + built-in decks (no surprise loading of a repo's decks):
+
+```toml
+[decks]
+repo_discovery = false
+```
+
 ## Agent presets
 
 Different agents "think" differently — Claude Code can reason for 20–30s behind
@@ -481,6 +527,9 @@ suppress_stats = false  # true also excludes focus-block windows from stats
 
 json = false            # emit the ndjson event stream (same as --json)
 json_fd = 2             # descriptor for events; only 2 (stderr) is supported
+
+[decks]                 # deck discovery (optional)
+repo_discovery = true   # load repo-local .idle-hands/decks/*.toml (team decks)
 ```
 
 Quiet-hours ranges may wrap past midnight (e.g. `22:00`→`07:00`). An unknown key

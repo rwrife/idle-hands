@@ -173,6 +173,9 @@ const (
 	SourceBuiltin Source = iota
 	// SourceUser is a deck loaded from ~/.idle-hands/decks/*.toml.
 	SourceUser
+	// SourceRepo is a deck loaded from a repo-local .idle-hands/decks/*.toml
+	// found by walking up from the working directory (a shared "team deck").
+	SourceRepo
 )
 
 // String renders a Source for list/preview output.
@@ -180,6 +183,8 @@ func (s Source) String() string {
 	switch s {
 	case SourceUser:
 		return "user"
+	case SourceRepo:
+		return "repo"
 	default:
 		return "built-in"
 	}
@@ -239,6 +244,20 @@ func LoadDir(dir string) (map[string]Deck, error) {
 // userDir means "built-ins only". An unknown name is an error listing the names
 // that are available.
 func Resolve(name, userDir string) (Deck, Source, error) {
+	return ResolveWithRepo(name, userDir, nil)
+}
+
+// ResolveWithRepo is Resolve plus repo-local team decks. Precedence is: repo
+// decks (addressed by file namespace) > user decks > built-ins. This matches
+// the issue's precedence with the explicit --deck flag handled by the caller
+// above this layer. repoDirs should be ordered nearest-first; a nil/empty slice
+// makes this identical to Resolve. Malformed repo decks are skipped (logged),
+// never fatal.
+func ResolveWithRepo(name, userDir string, repoDirs []string) (Deck, Source, error) {
+	repo := LoadRepoDecks(repoDirs)
+	if d, ok := repo[name]; ok {
+		return d, SourceRepo, nil
+	}
 	user, err := LoadDir(userDir)
 	if err != nil {
 		return Deck{}, SourceUser, err
@@ -248,8 +267,7 @@ func Resolve(name, userDir string) (Deck, Source, error) {
 	}
 	d, err := Builtin(name)
 	if err != nil {
-		// Re-build a friendlier "available" list that includes user decks.
-		return Deck{}, SourceBuiltin, fmt.Errorf("no deck %q (have: %s)", name, strings.Join(availableNames(user), ", "))
+		return Deck{}, SourceBuiltin, fmt.Errorf("no deck %q (have: %s)", name, strings.Join(availableNamesWithRepo(user, repo), ", "))
 	}
 	return d, SourceBuiltin, nil
 }
@@ -258,6 +276,15 @@ func Resolve(name, userDir string) (Deck, Source, error) {
 // sorted by name, with user decks overriding built-ins of the same name. It is
 // what the `deck` list command renders. A malformed user deck is an error.
 func Catalog(userDir string) ([]Entry, error) {
+	return CatalogWithRepo(userDir, nil)
+}
+
+// CatalogWithRepo is Catalog plus repo-local team decks. Repo decks are keyed
+// by file namespace and marked SourceRepo; a repo deck whose namespace also
+// exists as a user deck or built-in overrides it (and Shadows is set so the
+// listing can say so). repoDirs should be nearest-first; nil/empty makes this
+// identical to Catalog.
+func CatalogWithRepo(userDir string, repoDirs []string) ([]Entry, error) {
 	builtins, err := Builtins()
 	if err != nil {
 		return nil, err
@@ -266,14 +293,19 @@ func Catalog(userDir string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	repo := LoadRepoDecks(repoDirs)
 
-	byName := make(map[string]Entry, len(builtins)+len(user))
+	byName := make(map[string]Entry, len(builtins)+len(user)+len(repo))
 	for name, d := range builtins {
 		byName[name] = Entry{Deck: d, Source: SourceBuiltin}
 	}
 	for name, d := range user {
 		_, shadows := builtins[name]
 		byName[name] = Entry{Deck: d, Source: SourceUser, Shadows: shadows}
+	}
+	for name, d := range repo {
+		_, shadows := byName[name]
+		byName[name] = Entry{Deck: d, Source: SourceRepo, Shadows: shadows}
 	}
 
 	names := make([]string, 0, len(byName))
@@ -287,6 +319,27 @@ func Catalog(userDir string) ([]Entry, error) {
 		out = append(out, byName[name])
 	}
 	return out, nil
+}
+
+// availableNamesWithRepo returns the sorted union of repo, user, and built-in
+// deck names for friendly "have: …" error messages.
+func availableNamesWithRepo(user, repo map[string]Deck) []string {
+	set := make(map[string]struct{})
+	for _, n := range BuiltinNames() {
+		set[n] = struct{}{}
+	}
+	for n := range user {
+		set[n] = struct{}{}
+	}
+	for n := range repo {
+		set[n] = struct{}{}
+	}
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // availableNames returns the sorted union of user deck names and built-in deck
