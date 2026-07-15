@@ -53,6 +53,7 @@ Then wrap your agent and get on with it:
 ```bash
 idle-hands watch -- <your-agent-command>   # e.g. claude, aider, codex
 idle-hands watch --preset claude -- claude # tune detection for a known agent
+idle-hands watch --json -- claude          # emit ndjson busy/idle events on stderr
 idle-hands deck                            # see the available decks
 idle-hands preset                          # see the agent presets
 idle-hands stats                           # "reclaimed 14 min across 9 waits today"
@@ -157,6 +158,56 @@ file, and a stale socket left by a crashed run is detected and replaced on the
 next start. On **Windows** (no Unix sockets), it falls back to a loopback-only
 TCP listener on `127.0.0.1`, publishing its chosen port to
 `~/.idle-hands/signal.port`; this is still local-only by binding to loopback.
+
+## JSON event stream (react to busy/idle from any tool)
+
+Plugin signals let tools *push* state **in**. The `--json` flag is the mirror:
+it lets tools *read* state **out**. Together they make `idle-hands` a small,
+well-behaved local event hub.
+
+Pass `--json` to `watch` (or set `json = true` in config) and idle-hands emits
+one newline-delimited JSON object per state transition and per card show/dismiss,
+so status bars, tmux, dashboards, or the plugin-signals consumers can react
+without scraping the TUI:
+
+```bash
+idle-hands watch --json -- claude        # emit ndjson events on stderr
+idle-hands watch --json -- aider 2>events.ndjson   # or capture them to a file
+```
+
+Events go to **stderr** by default so the wrapped agent's stdout/PTY stays
+untouched. The stream is **off** unless you ask for it — default behavior is
+unchanged. Each line is a compact JSON object with an RFC3339 UTC `ts`:
+
+```json
+{"ts":"2026-07-12T21:00:00Z","event":"state","state":"busy"}
+{"ts":"2026-07-12T21:00:00Z","event":"card_shown","deck":"move","title":"Stand up & stretch"}
+{"ts":"2026-07-12T21:00:42Z","event":"card_dismissed"}
+{"ts":"2026-07-12T21:00:42Z","event":"state","state":"idle","reclaimed_seconds":42}
+```
+
+| event | fields | when |
+| --- | --- | --- |
+| `state` (`busy`) | `state` | output went quiet past the threshold |
+| `card_shown` | `deck`, `title` | a card was drawn (fires again if the hook deck swaps in its real card) |
+| `card_dismissed` | — | the on-screen card was cleared |
+| `state` (`idle`) | `state`, `reclaimed_seconds` | the agent returned; window length in whole seconds |
+
+During quiet hours or a focus block the `state` events still fire (the state
+truly changed), but no `card_shown`/`card_dismissed` is emitted because no card
+was drawn. A quick tmux status-bar consumer:
+
+```bash
+idle-hands watch --json -- claude 2>&1 >/dev/tty \
+  | while read -r line; do
+      state=$(printf '%s' "$line" | jq -r 'select(.event=="state").state // empty')
+      [ -n "$state" ] && tmux set -g @agent "$state"
+    done
+```
+
+The target descriptor can be changed with `--json-fd <n>` (or `json_fd` in
+config); only `2` (stderr) is supported today — `1` (stdout) is rejected because
+it would corrupt the wrapped agent's output.
 
 ## Build from source
 
@@ -427,6 +478,9 @@ end   = "07:00"         # wrapped and reclaimed time is still tallied
 
 [focus_safe]            # `idle-hands focus` behavior (optional)
 suppress_stats = false  # true also excludes focus-block windows from stats
+
+json = false            # emit the ndjson event stream (same as --json)
+json_fd = 2             # descriptor for events; only 2 (stderr) is supported
 ```
 
 Quiet-hours ranges may wrap past midnight (e.g. `22:00`→`07:00`). An unknown key
@@ -447,6 +501,11 @@ The **hook** deck adds `hook_timeout` (the hard per-hook ceiling, default `10s`)
 and one or more `[[hooks]]` blocks — each with a `name` and an argv `cmd`. Only
 the commands you list here ever run; see
 [Custom card hooks](#custom-card-hooks-do-real-work-during-the-wait) above.
+
+The **json** event stream adds two optional keys — `json` (enable the ndjson
+stream, same as the `--json` flag) and `json_fd` (the target descriptor, default
+`2`/stderr). See
+[JSON event stream](#json-event-stream-react-to-busyidle-from-any-tool) above.
 
 ## Focus-safe mode
 

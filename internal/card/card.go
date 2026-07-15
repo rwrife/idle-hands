@@ -221,6 +221,12 @@ type Renderer struct {
 	// behavior (the static and reveal decks). See AsyncCard.
 	async AsyncCard
 
+	// onShow/onDismiss are optional event hooks (ndjson stream). deckName is the
+	// deck's name, reported with each card_shown event.
+	onShow    func(deck, title string)
+	onDismiss func()
+	deckName  string
+
 	mu       sync.Mutex // guards the fields below (timer/goroutine run concurrently)
 	shown    bool       // a card is currently on screen for this BUSY window
 	lastLine int        // number of lines the rendered card spanned (for erase)
@@ -272,6 +278,14 @@ type Options struct {
 	// context cancelled on OnIdle) and redraws the returned card in place. When
 	// set, Deck should be a one-card placeholder deck (e.g. "…running hook").
 	Async AsyncCard
+	// OnShow, when non-nil, is called each time a card is drawn for a BUSY
+	// window with that card's deck name and title. For the async ("hook") deck
+	// it fires once for the placeholder and again when the real card replaces
+	// it. It drives the optional ndjson event stream and must not block.
+	OnShow func(deck, title string)
+	// OnDismiss, when non-nil, is called once when a shown card is cleared on
+	// IDLE. It is not called if no card was showing. Must not block.
+	OnDismiss func()
 }
 
 // defaultWidth is the card box width when none is supplied. Comfortable in an
@@ -299,14 +313,17 @@ func NewRenderer(w io.Writer, opts Options) *Renderer {
 		reveal = 0
 	}
 	return &Renderer{
-		w:        w,
-		deck:     opts.Deck,
-		picker:   NewSpacedPicker(opts.Deck, opts.Rand, opts.Spacing),
-		theme:    theme,
-		width:    width,
-		reveal:   reveal,
-		newTimer: newTimer,
-		async:    opts.Async,
+		w:         w,
+		deck:      opts.Deck,
+		picker:    NewSpacedPicker(opts.Deck, opts.Rand, opts.Spacing),
+		theme:     theme,
+		width:     width,
+		reveal:    reveal,
+		newTimer:  newTimer,
+		async:     opts.Async,
+		onShow:    opts.OnShow,
+		onDismiss: opts.OnDismiss,
+		deckName:  opts.Deck.Name,
 	}
 }
 
@@ -334,6 +351,7 @@ func (r *Renderer) OnBusy(idleFor time.Duration) {
 	r.draw()
 	r.shown = true
 	r.gen++
+	r.notifyShow(c)
 
 	if r.async != nil {
 		// Hook deck: the placeholder is on screen; run the producer bounded by a
@@ -374,6 +392,7 @@ func (r *Renderer) runAsync(ctx context.Context, gen uint64) {
 	r.cur = c
 	r.revealed = true
 	r.draw()
+	r.notifyShow(c)
 }
 
 // doReveal is the timer callback that flips the current card to its answered
@@ -389,6 +408,16 @@ func (r *Renderer) doReveal() {
 	fmt.Fprint(r.w, r.clearSeq()) // erase the front-only frame
 	r.revealed = true
 	r.draw()
+}
+
+// notifyShow fires the onShow hook (if set) for card c, reporting the deck name
+// and the card's title. It assumes r.mu is held; the hook must not block or
+// re-enter the renderer. It is called after a card is drawn (initial card,
+// async replacement) so the ndjson stream reflects exactly what's on screen.
+func (r *Renderer) notifyShow(c deck.Card) {
+	if r.onShow != nil {
+		r.onShow(r.deckName, c.Title)
+	}
 }
 
 // draw renders the current card (front-only or revealed per r.revealed), writes
@@ -420,6 +449,9 @@ func (r *Renderer) OnIdle(reclaimed time.Duration) {
 	r.gen++ // invalidate any async result still in flight for the old window
 	if r.shown {
 		fmt.Fprint(r.w, r.clearSeq())
+		if r.onDismiss != nil {
+			r.onDismiss()
+		}
 	}
 	fmt.Fprintf(r.w, "  %s agent's back — reclaimed %s\n", "👋", reclaimed.Round(time.Second))
 	r.shown = false

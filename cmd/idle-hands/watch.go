@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/rwrife/idle-hands/internal/deck"
 	"github.com/rwrife/idle-hands/internal/detect"
 	"github.com/rwrife/idle-hands/internal/duckdiff"
+	"github.com/rwrife/idle-hands/internal/events"
 	"github.com/rwrife/idle-hands/internal/focus"
 	"github.com/rwrife/idle-hands/internal/hook"
 	"github.com/rwrife/idle-hands/internal/preset"
@@ -47,6 +49,11 @@ type watchEnv struct {
 	// focusSuppressStats mirrors config focus_safe.suppress_stats: when true, a
 	// window suppressed by an active focus block is not recorded to stats.
 	focusSuppressStats bool
+
+	// events is the optional ndjson event emitter (nil-safe: a nil *Emitter is a
+	// no-op, so handleState calls it unconditionally). It is fed BUSY/IDLE state
+	// transitions; card show/dismiss events come from the renderer's hooks.
+	events *events.Emitter
 	// focusActive records whether the in-flight BUSY window was suppressed by an
 	// active focus block, so the matching IDLE transition can honor
 	// focusSuppressStats without re-checking the clock (which may have advanced
@@ -61,7 +68,8 @@ type watchEnv struct {
 // real clock. Centralizing it keeps the wrapped-command and standalone-process
 // paths behaving identically around cards, stats, and quiet hours.
 func newWatchEnv(cfg config.Config) *watchEnv {
-	renderer := newCardRenderer(cfg)
+	emitter := newEventEmitter(cfg)
+	renderer := newCardRenderer(cfg, emitter)
 	st, err := store.New(store.Options{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "idle-hands: stats unavailable (%v); not recording\n", err)
@@ -81,7 +89,36 @@ func newWatchEnv(cfg config.Config) *watchEnv {
 		now:                time.Now,
 		focus:              foc,
 		focusSuppressStats: cfg.FocusSafe.SuppressStats,
+		events:             emitter,
 	}
+}
+
+// newEventEmitter builds the ndjson event emitter for the watch session, or a
+// nil (no-op) emitter when the stream is disabled. When enabled it writes to the
+// configured file descriptor (default 2, stderr) so the wrapped agent's stdout
+// stays untouched. An unusable fd is a warning, not a fatal error: the agent is
+// still wrapped, just without the event stream.
+func newEventEmitter(cfg config.Config) *events.Emitter {
+	if !cfg.JSON.Enabled {
+		return nil
+	}
+	var w io.Writer
+	switch cfg.JSON.FD {
+	case 1:
+		// Guarded against in config, but stay defensive: never emit to stdout.
+		fmt.Fprintf(os.Stderr, "idle-hands: json_fd 1 (stdout) is not allowed; using stderr\n")
+		w = os.Stderr
+	case 2, 0:
+		w = os.Stderr
+	default:
+		f := os.NewFile(uintptr(cfg.JSON.FD), fmt.Sprintf("fd/%d", cfg.JSON.FD))
+		if f == nil {
+			fmt.Fprintf(os.Stderr, "idle-hands: json_fd %d is not open; event stream disabled\n", cfg.JSON.FD)
+			return nil
+		}
+		w = f
+	}
+	return events.New(w)
 }
 
 // cmdWatch runs the wrapped command under idle-hands. The child is spawned via
@@ -127,6 +164,19 @@ func cmdWatch(args []string) (int, error) {
 	detCfg, err := detectorConfig(cfg, flags.preset)
 	if err != nil {
 		return 2, err
+	}
+
+	// Watch flags override the config's event-stream settings so
+	// `idle-hands watch --json -- <agent>` works without editing config.
+	if flags.json {
+		cfg.JSON.Enabled = true
+	}
+	if flags.jsonFD != nil {
+		fd := *flags.jsonFD
+		if fd == 1 {
+			return 2, fmt.Errorf("watch: --json-fd 1 (stdout) is not allowed; it would corrupt the agent's output — use 2 (stderr)")
+		}
+		cfg.JSON.FD = fd
 	}
 
 	// Standalone watcher mode: instead of wrapping a command, watch an
@@ -200,6 +250,10 @@ type watchFlags struct {
 	// process is the target process name for standalone watcher mode ("" when
 	// wrapping a command instead).
 	process string
+	// json, when set, enables the ndjson event stream (overrides config).
+	json bool
+	// jsonFD, when non-nil, overrides the event-stream file descriptor.
+	jsonFD *int
 }
 
 // parseWatchFlags pulls idle-hands' own flags off the front of the watch
@@ -256,6 +310,35 @@ func parseWatchFlags(args []string) (flags watchFlags, rest []string, err error)
 				return watchFlags{}, nil, fmt.Errorf("watch: --process needs a non-empty process name")
 			}
 			flags.process = val
+		case "--json", "-json":
+			// Boolean flag: an explicit =false disables; a bare --json enables.
+			// Only consume =value form; a following token is the child command.
+			if hasVal {
+				switch val {
+				case "true", "1", "":
+					flags.json = true
+				case "false", "0":
+					flags.json = false
+				default:
+					return watchFlags{}, nil, fmt.Errorf("watch: --json takes true/false, got %q", val)
+				}
+			} else {
+				flags.json = true
+			}
+		case "--json-fd", "-json-fd":
+			if !hasVal {
+				if i+1 >= len(args) {
+					return watchFlags{}, nil, fmt.Errorf("watch: --json-fd needs a value (2 for stderr)")
+				}
+				val = args[i+1]
+				i++
+			}
+			fd, err := strconv.Atoi(strings.TrimSpace(val))
+			if err != nil {
+				return watchFlags{}, nil, fmt.Errorf("watch: --json-fd %q is not a number", val)
+			}
+			flags.jsonFD = &fd
+			flags.json = true // supplying a fd implies enabling the stream
 		default:
 			return watchFlags{}, nil, fmt.Errorf("watch: unknown flag %q (did you forget \"--\" before the command?)", arg)
 		}
@@ -331,7 +414,9 @@ func joinNames() string {
 //
 // If the deck can't be loaded it returns nil, and handleState falls back to
 // plain one-line notices so watch still works.
-func newCardRenderer(cfg config.Config) *card.Renderer {
+func newCardRenderer(cfg config.Config, em *events.Emitter) *card.Renderer {
+	onShow := func(deck, title string) { em.CardShown(deck, title) }
+	onDismiss := func() { em.CardDismissed() }
 	if cfg.Deck == srs.DeckName {
 		d, err := srs.LoadDeck(cfg.SRS.Source)
 		if err != nil {
@@ -339,9 +424,11 @@ func newCardRenderer(cfg config.Config) *card.Renderer {
 			return nil
 		}
 		return card.NewRenderer(os.Stderr, card.Options{
-			Deck:    d,
-			Reveal:  cfg.SRS.Reveal,
-			Spacing: cfg.SRS.Spacing,
+			Deck:      d,
+			Reveal:    cfg.SRS.Reveal,
+			Spacing:   cfg.SRS.Spacing,
+			OnShow:    onShow,
+			OnDismiss: onDismiss,
 		})
 	}
 
@@ -362,7 +449,7 @@ func newCardRenderer(cfg config.Config) *card.Renderer {
 			// once, so the static-duck fallback isn't a silent surprise.
 			fmt.Fprintf(os.Stderr, "idle-hands: duckdiff → %s; showing the static duck deck\n", res.Reason)
 		}
-		return card.NewRenderer(os.Stderr, card.Options{Deck: res.Deck})
+		return card.NewRenderer(os.Stderr, card.Options{Deck: res.Deck, OnShow: onShow, OnDismiss: onDismiss})
 	}
 
 	if cfg.Deck == hook.DeckName {
@@ -390,6 +477,8 @@ func newCardRenderer(cfg config.Config) *card.Renderer {
 				}
 				return res.Card, true
 			},
+			OnShow:    onShow,
+			OnDismiss: onDismiss,
 		})
 	}
 
@@ -404,7 +493,7 @@ func newCardRenderer(cfg config.Config) *card.Renderer {
 		fmt.Fprintf(os.Stderr, "idle-hands: deck %q unavailable (%v); using plain notices\n", cfg.Deck, err)
 		return nil
 	}
-	return card.NewRenderer(os.Stderr, card.Options{Deck: d})
+	return card.NewRenderer(os.Stderr, card.Options{Deck: d, OnShow: onShow, OnDismiss: onDismiss})
 }
 
 // newBufRenderer builds a card.Renderer for deck d writing to w. It exists so
@@ -422,6 +511,10 @@ func newBufRenderer(w io.Writer, d deck.Deck) *card.Renderer {
 func handleState(ev detect.Event, env *watchEnv) {
 	switch ev.State {
 	case detect.StateBusy:
+		// The agent went quiet: emit the state event regardless of whether the
+		// on-screen card is suppressed (quiet hours / focus). External tooling
+		// cares about the transition even when we hush the TUI card.
+		env.events.Busy()
 		// Focus-safe mode: while a focus block is active, hush the card even
 		// outside quiet hours. The window is still recorded on IDLE unless
 		// focus_safe.suppress_stats opts out.
@@ -442,6 +535,8 @@ func handleState(ev detect.Event, env *watchEnv) {
 		}
 		env.renderer.OnBusy(ev.IdleFor)
 	case detect.StateIdle:
+		// The agent returned: emit the idle state event with the reclaimed span.
+		env.events.Idle(ev.IdleFor)
 		// Record the just-ended window regardless of whether a card was shown,
 		// so quiet-hours windows still count toward reclaimed time. The one
 		// exception is a focus-block window when focus_safe.suppress_stats is

@@ -35,6 +35,11 @@ const DefaultDeck = "move"
 // a dependency cycle and to keep config self-describing).
 const DefaultBusyThreshold = 20 * time.Second
 
+// DefaultJSONFD is the file descriptor the ndjson event stream writes to when
+// enabled without an explicit json_fd. 2 is stderr, keeping the wrapped agent's
+// stdout/PTY untouched.
+const DefaultJSONFD = 2
+
 // DefaultSRSReveal is how long the flashcard deck shows the question before
 // revealing the answer when config sets no srs_reveal. Long enough to actually
 // try to recall, short enough to still finish inside a typical think window.
@@ -90,6 +95,21 @@ type Config struct {
 	Hooks HooksConfig
 	// FocusSafe holds the focus-safe-mode settings.
 	FocusSafe FocusSafeConfig
+	// JSON holds the ndjson event-stream settings (the --json flag / config).
+	JSON JSONConfig
+}
+
+// JSONConfig controls the optional ndjson event stream emitted during watch.
+// When Enabled, one JSON object per state change and per card show/dismiss is
+// written to file descriptor FD (default 2, stderr) so external tooling can
+// react without scraping the TUI. Disabled by default: no events are emitted
+// and behavior is unchanged.
+type JSONConfig struct {
+	// Enabled turns the event stream on. The --json watch flag also sets it.
+	Enabled bool
+	// FD is the file descriptor events are written to. Defaults to 2 (stderr)
+	// so the wrapped agent's stdout/PTY stays untouched.
+	FD int
 }
 
 // FocusSafeConfig tunes focus-safe mode (the `idle-hands focus` command). By
@@ -192,6 +212,8 @@ type fileConfig struct {
 	HookTimeout   string         `toml:"hook_timeout"`
 	Hooks         []fileHook     `toml:"hooks"`
 	FocusSafe     fileFocusSafe  `toml:"focus_safe"`
+	JSON          *bool          `toml:"json"`
+	JSONFD        *int           `toml:"json_fd"`
 }
 
 // fileFocusSafe is the wire shape of the [focus_safe] block.
@@ -227,6 +249,9 @@ func Default() Config {
 		},
 		Hooks: HooksConfig{
 			Timeout: DefaultHookTimeout,
+		},
+		JSON: JSONConfig{
+			FD: DefaultJSONFD,
 		},
 	}
 }
@@ -347,7 +372,33 @@ func Parse(data []byte) (Config, error) {
 
 	cfg.FocusSafe.SuppressStats = fc.FocusSafe.SuppressStats
 
+	if err := applyJSON(&cfg, fc); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
+}
+
+// applyJSON resolves the ndjson event-stream settings. Both keys are optional:
+// omitting them keeps the stream disabled on the default fd. A present json_fd
+// must be a non-negative descriptor; only 1 (stdout) and 2 (stderr) are
+// supported today, and stdout is rejected because it would corrupt the wrapped
+// agent's own output stream.
+func applyJSON(cfg *Config, fc fileConfig) error {
+	if fc.JSON != nil {
+		cfg.JSON.Enabled = *fc.JSON
+	}
+	if fc.JSONFD != nil {
+		fd := *fc.JSONFD
+		if fd != 1 && fd != 2 {
+			return fmt.Errorf("json_fd must be 1 (stdout) or 2 (stderr), got %d", fd)
+		}
+		if fd == 1 {
+			return fmt.Errorf("json_fd 1 (stdout) is not allowed: it would corrupt the wrapped agent's output; use 2 (stderr)")
+		}
+		cfg.JSON.FD = fd
+	}
+	return nil
 }
 
 // applyHooks resolves the hook-deck settings onto cfg. A blank hook_timeout
