@@ -488,7 +488,13 @@ func newCardRenderer(cfg config.Config, em *events.Emitter) *card.Renderer {
 		// still are. Resolve against an empty dir (built-ins only).
 		userDir = ""
 	}
-	d, _, err := deck.Resolve(cfg.Deck, userDir)
+	var repoDirs []string
+	if cfg.Decks.RepoDiscovery {
+		if dirs, derr := deck.DiscoverRepoDeckDirs(""); derr == nil {
+			repoDirs = dirs
+		}
+	}
+	d, _, err := deck.ResolveWithRepo(cfg.Deck, userDir, repoDirs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "idle-hands: deck %q unavailable (%v); using plain notices\n", cfg.Deck, err)
 		return nil

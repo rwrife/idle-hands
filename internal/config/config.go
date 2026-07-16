@@ -97,6 +97,19 @@ type Config struct {
 	FocusSafe FocusSafeConfig
 	// JSON holds the ndjson event-stream settings (the --json flag / config).
 	JSON JSONConfig
+	// Decks holds deck-discovery settings (e.g. repo-local team decks).
+	Decks DecksConfig
+}
+
+// DecksConfig controls how decks beyond the built-ins are discovered. Today it
+// governs repo-local "team decks": *.toml files under a .idle-hands/decks
+// directory found by walking up from the working directory (like git config
+// discovery), so a team can commit shared decks to their repo.
+type DecksConfig struct {
+	// RepoDiscovery enables the upward .idle-hands/decks walk. Default true; set
+	// false to load only user (~/.idle-hands/decks) and built-in decks, so
+	// there's no surprise loading of a repo's decks when it's disabled.
+	RepoDiscovery bool
 }
 
 // JSONConfig controls the optional ndjson event stream emitted during watch.
@@ -214,6 +227,13 @@ type fileConfig struct {
 	FocusSafe     fileFocusSafe  `toml:"focus_safe"`
 	JSON          *bool          `toml:"json"`
 	JSONFD        *int           `toml:"json_fd"`
+	Decks         fileDecks      `toml:"decks"`
+}
+
+// fileDecks is the wire shape of the [decks] block. RepoDiscovery is a pointer
+// so an omitted key defaults to true, while an explicit false is honored.
+type fileDecks struct {
+	RepoDiscovery *bool `toml:"repo_discovery"`
 }
 
 // fileFocusSafe is the wire shape of the [focus_safe] block.
@@ -252,6 +272,9 @@ func Default() Config {
 		},
 		JSON: JSONConfig{
 			FD: DefaultJSONFD,
+		},
+		Decks: DecksConfig{
+			RepoDiscovery: true,
 		},
 	}
 }
@@ -374,6 +397,10 @@ func Parse(data []byte) (Config, error) {
 
 	if err := applyJSON(&cfg, fc); err != nil {
 		return Config{}, err
+	}
+
+	if fc.Decks.RepoDiscovery != nil {
+		cfg.Decks.RepoDiscovery = *fc.Decks.RepoDiscovery
 	}
 
 	return cfg, nil

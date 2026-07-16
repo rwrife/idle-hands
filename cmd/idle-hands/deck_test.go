@@ -35,7 +35,7 @@ func writeUserDeck(t *testing.T, dir, file, contents string) {
 // deck directory.
 func TestRunDeckListBuiltins(t *testing.T) {
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), noSRS, noDuck, noHooks, nil)
+	code, err := runDeck(&buf, t.TempDir(), nil, noSRS, noDuck, noHooks, nil)
 	if err != nil {
 		t.Fatalf("runDeck list: %v", err)
 	}
@@ -61,7 +61,7 @@ title = "Push-up"
 text = "Drop and give me five."`)
 
 	var buf bytes.Buffer
-	if _, err := runDeck(&buf, dir, noSRS, noDuck, noHooks, nil); err != nil {
+	if _, err := runDeck(&buf, dir, nil, noSRS, noDuck, noHooks, nil); err != nil {
 		t.Fatalf("runDeck list: %v", err)
 	}
 	out := buf.String()
@@ -76,7 +76,7 @@ text = "Drop and give me five."`)
 // TestRunDeckPreview prints every card of the named deck in order.
 func TestRunDeckPreview(t *testing.T) {
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), noSRS, noDuck, noHooks, []string{"duck"})
+	code, err := runDeck(&buf, t.TempDir(), nil, noSRS, noDuck, noHooks, []string{"duck"})
 	if err != nil {
 		t.Fatalf("runDeck preview: %v", err)
 	}
@@ -103,7 +103,7 @@ title = "One thing"
 text = "Name the single next action."`)
 
 	var buf bytes.Buffer
-	if _, err := runDeck(&buf, dir, noSRS, noDuck, noHooks, []string{"focus"}); err != nil {
+	if _, err := runDeck(&buf, dir, nil, noSRS, noDuck, noHooks, []string{"focus"}); err != nil {
 		t.Fatalf("runDeck preview user: %v", err)
 	}
 	out := buf.String()
@@ -119,7 +119,7 @@ text = "Name the single next action."`)
 // deck name.
 func TestRunDeckUnknownErrors(t *testing.T) {
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), noSRS, noDuck, noHooks, []string{"nope"})
+	code, err := runDeck(&buf, t.TempDir(), nil, noSRS, noDuck, noHooks, []string{"nope"})
 	if err == nil {
 		t.Fatal("runDeck(nope) expected error, got nil")
 	}
@@ -131,7 +131,7 @@ func TestRunDeckUnknownErrors(t *testing.T) {
 // TestRunDeckTooManyArgs is a usage error.
 func TestRunDeckTooManyArgs(t *testing.T) {
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), noSRS, noDuck, noHooks, []string{"a", "b"})
+	code, err := runDeck(&buf, t.TempDir(), nil, noSRS, noDuck, noHooks, []string{"a", "b"})
 	if err == nil {
 		t.Fatal("runDeck(a b) expected error, got nil")
 	}
@@ -159,7 +159,7 @@ func TestRunDeckListIncludesSRS(t *testing.T) {
 	srsCfg := config.SRSConfig{Source: writeSRSSource(t, dir)}
 
 	var buf bytes.Buffer
-	if _, err := runDeck(&buf, t.TempDir(), srsCfg, noDuck, noHooks, nil); err != nil {
+	if _, err := runDeck(&buf, t.TempDir(), nil, srsCfg, noDuck, noHooks, nil); err != nil {
 		t.Fatalf("runDeck list: %v", err)
 	}
 	out := buf.String()
@@ -175,7 +175,7 @@ func TestRunDeckListIncludesSRS(t *testing.T) {
 // no card source is set (so the listing doesn't advertise an empty deck).
 func TestRunDeckListSRSAbsentWhenUnconfigured(t *testing.T) {
 	var buf bytes.Buffer
-	if _, err := runDeck(&buf, t.TempDir(), noSRS, noDuck, noHooks, nil); err != nil {
+	if _, err := runDeck(&buf, t.TempDir(), nil, noSRS, noDuck, noHooks, nil); err != nil {
 		t.Fatalf("runDeck list: %v", err)
 	}
 	if strings.Contains(buf.String(), "[srs]") {
@@ -190,7 +190,7 @@ func TestRunDeckPreviewSRS(t *testing.T) {
 	srsCfg := config.SRSConfig{Source: writeSRSSource(t, dir)}
 
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), srsCfg, noDuck, noHooks, []string{"srs"})
+	code, err := runDeck(&buf, t.TempDir(), nil, srsCfg, noDuck, noHooks, []string{"srs"})
 	if err != nil {
 		t.Fatalf("runDeck preview srs: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestRunDeckPreviewSRS(t *testing.T) {
 // previewed but no card source is configured.
 func TestRunDeckPreviewSRSUnconfigured(t *testing.T) {
 	var buf bytes.Buffer
-	code, err := runDeck(&buf, t.TempDir(), noSRS, noDuck, noHooks, []string{"srs"})
+	code, err := runDeck(&buf, t.TempDir(), nil, noSRS, noDuck, noHooks, []string{"srs"})
 	if err == nil {
 		t.Fatal("runDeck(srs) with no source expected error, got nil")
 	}
