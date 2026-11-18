@@ -52,6 +52,8 @@ Commands:
 Config (optional): ~/.idle-hands/config.toml
   deck = "move"            # move | duck | tidy | srs | duckdiff | <your-deck>
   busy_threshold = "20s"  # how long quiet before a card fires
+  adaptive = false       # learn per-command quiet gaps in wrapped mode
+  adaptive_percentile = 75 # percentile to use after 20 samples
   [quiet_hours]           # suppress cards during these local hours
   start = "22:00"
   end   = "07:00"

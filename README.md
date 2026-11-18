@@ -384,6 +384,9 @@ suggested threshold, so your config is never silently overridden. (Common
 spellings like `claude-code`, `gh_copilot`, or `copilot` resolve to the right
 preset.)
 
+Opting into adaptive mode uses this static threshold only during warm-up;
+afterward the learned threshold takes precedence (see [Config](#config)).
+
 ### Flashcards (spaced repetition)
 
 Turn the wait into actual learning. Point the built-in **srs** deck at your own
@@ -517,6 +520,8 @@ changes take effect on the next run:
 ```toml
 deck = "duck"            # which deck to show: move | duck | tidy | srs | duckdiff | hook | <your-deck>
 busy_threshold = "30s"  # how long output must stay quiet before a card fires
+adaptive = false       # opt into learned thresholds for wrapped commands
+adaptive_percentile = 75 # percentile of recent quiet gaps (greater than 0, up to 100)
 
 [quiet_hours]           # suppress cards during these local hours (optional)
 start = "22:00"         # cards are withheld 22:00 → 07:00; the agent is still
@@ -534,6 +539,17 @@ repo_discovery = true   # load repo-local .idle-hands/decks/*.toml (team decks)
 
 Quiet-hours ranges may wrap past midnight (e.g. `22:00`→`07:00`). An unknown key
 or a malformed value is reported loudly so a typo never silently does nothing.
+
+With `adaptive = true`, wrapped mode learns from the last 128 completed quiet
+gaps of at least one second per executable command (arguments are not stored
+or included in the key). Spinner noise does not end a gap; real output does.
+Sub-second streaming gaps and unfinished gaps at exit are not samples. History
+is saved to `~/.idle-hands/state.json` and loaded on the next run. Until 20
+samples exist, the static `busy_threshold` (or preset threshold) applies.
+After warm-up, the nearest-rank `adaptive_percentile` (default p75) replaces it,
+clamped between 5 seconds and 2 minutes. Learning includes pauses shorter than
+the current threshold, not just BUSY windows. Disabled mode neither learns nor
+uses history; `--process` and plugin signals retain their existing behavior.
 
 The **srs** flashcard deck adds three optional keys — `srs_source` (path to your
 card file), `srs_reveal` (question-only delay, default `6s`), and `srs_spacing`

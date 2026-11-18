@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -199,9 +200,12 @@ func cmdWatch(args []string) (int, error) {
 		return 2, errNoCommand
 	}
 
-	det := detect.New(detCfg)
-
 	env := newWatchEnv(cfg)
+	detCfg, err = adaptiveDetectorConfig(cfg, detCfg, env.store, filepath.Clean(args[0]))
+	if err != nil {
+		return 1, fmt.Errorf("adaptive history: %w", err)
+	}
+	det := detect.New(detCfg)
 
 	// Drain the output tap, feeding each chunk to the detector. A ticker on the
 	// same loop advances the time-based BUSY check. The loop exits when wrap
@@ -241,6 +245,28 @@ func cmdWatch(args []string) (int, error) {
 		return 1, err
 	}
 	return res.ExitCode, nil
+}
+
+func adaptiveDetectorConfig(cfg config.Config, dc detect.Config, st *store.Store, command string) (detect.Config, error) {
+	if !cfg.Adaptive {
+		return dc, nil
+	}
+	if st == nil {
+		return dc, fmt.Errorf("stats store unavailable; cannot load adaptive history")
+	}
+	samples, err := st.IdleSamples(command)
+	if err != nil {
+		return dc, err
+	}
+	dc.Adaptive = true
+	dc.AdaptivePercentile = cfg.AdaptivePercentile
+	dc.IdleSamples = samples
+	dc.OnIdleWindow = func(gap time.Duration) {
+		if err := st.RecordIdleWindow(command, gap); err != nil {
+			fmt.Fprintf(os.Stderr, "idle-hands: record adaptive history: %v\n", err)
+		}
+	}
+	return dc, nil
 }
 
 // watchFlags holds idle-hands' own parsed flags for the watch subcommand.

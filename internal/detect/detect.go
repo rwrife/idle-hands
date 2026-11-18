@@ -81,6 +81,12 @@ type Config struct {
 	// BusyThreshold is the quiet duration that triggers BUSY. Zero or negative
 	// selects DefaultBusyThreshold.
 	BusyThreshold time.Duration
+	// Adaptive learns from completed quiet gaps of at least one second.
+	// IdleSamples seeds the rolling history; OnIdleWindow persists new samples.
+	Adaptive           bool
+	AdaptivePercentile float64
+	IdleSamples        []time.Duration
+	OnIdleWindow       func(time.Duration)
 
 	// Now returns the current time. Zero value selects time.Now. Tests inject
 	// a controllable clock here.
@@ -127,10 +133,14 @@ var spinnerRunes = map[rune]bool{
 // drive it from a single goroutine (typically the one draining the wrap tap,
 // plus a ticker on the same select loop).
 type Detector struct {
-	threshold time.Duration
-	now       func() time.Time
-	keywords  []string
-	useSpin   bool
+	threshold    time.Duration
+	adaptive     bool
+	percentile   float64
+	samples      []time.Duration
+	onIdleWindow func(time.Duration)
+	now          func() time.Time
+	keywords     []string
+	useSpin      bool
 
 	state    State
 	lastReal time.Time // time of the last real-progress output
@@ -153,22 +163,36 @@ func New(cfg Config) *Detector {
 		kw = DefaultKeywords
 	}
 	start := now()
-	return &Detector{
-		threshold: threshold,
-		now:       now,
-		keywords:  kw,
-		useSpin:   !cfg.DisableSpinnerHeuristic,
-		state:     StateIdle,
-		lastReal:  start,
-		changed:   start,
+	d := &Detector{
+		threshold:    threshold,
+		adaptive:     cfg.Adaptive,
+		percentile:   cfg.AdaptivePercentile,
+		onIdleWindow: cfg.OnIdleWindow,
+		now:          now,
+		keywords:     kw,
+		useSpin:      !cfg.DisableSpinnerHeuristic,
+		state:        StateIdle,
+		lastReal:     start,
+		changed:      start,
 	}
+	if d.adaptive {
+		for _, sample := range cfg.IdleSamples {
+			d.observe(sample)
+		}
+	}
+	return d
 }
 
 // State returns the detector's current state.
 func (d *Detector) State() State { return d.state }
 
-// Threshold returns the configured busy threshold (after defaulting).
-func (d *Detector) Threshold() time.Duration { return d.threshold }
+// Threshold returns the current busy threshold, falling back during warm-up.
+func (d *Detector) Threshold() time.Duration {
+	if !d.adaptive || len(d.samples) < AdaptiveWarmupSamples {
+		return d.threshold
+	}
+	return adaptiveThreshold(d.samples, d.percentile)
+}
 
 // Feed processes a chunk of child output. If the chunk represents real
 // progress it (re)marks activity and, if currently BUSY, returns an IDLE
@@ -181,6 +205,13 @@ func (d *Detector) Feed(chunk []byte) (Event, bool) {
 		return Event{}, false
 	}
 	now := d.now()
+	gap := now.Sub(d.lastReal)
+	if d.adaptive && gap >= time.Second {
+		d.observe(gap)
+		if d.onIdleWindow != nil {
+			d.onIdleWindow(gap)
+		}
+	}
 	d.lastReal = now
 	if d.state == StateBusy {
 		return d.transition(StateIdle, now), true
@@ -197,7 +228,7 @@ func (d *Detector) Tick(t time.Time) (Event, bool) {
 	if t.IsZero() {
 		t = d.now()
 	}
-	if d.state == StateIdle && t.Sub(d.lastReal) >= d.threshold {
+	if d.state == StateIdle && t.Sub(d.lastReal) >= d.Threshold() {
 		return d.transition(StateBusy, t), true
 	}
 	return Event{}, false
