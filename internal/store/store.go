@@ -1,7 +1,7 @@
 // Package store persists the cheeky little scoreboard idle-hands keeps: how
 // many BUSY windows you reclaimed and how many seconds they added up to, per
 // day. It is a single JSON file at ~/.idle-hands/state.json — no database, no
-// schema migrations, just a map of date → tally.
+// schema migrations, just daily tallies and optional per-command quiet history.
 //
 // Stats are keyed by *local* calendar date ("YYYY-MM-DD") so "today" means the
 // user's today. Each completed BUSY window is one Record call; `idle-hands
@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/rwrife/idle-hands/internal/detect"
 )
 
 // dirName / fileName locate the stats file under the user's home directory.
@@ -47,8 +49,8 @@ type DayStat struct {
 	Seconds int64 `json:"seconds"`
 }
 
-// data is the on-disk document: a version marker plus the per-day tallies keyed
-// by "YYYY-MM-DD". The version lets a future format change be detected rather
+// data is the on-disk document: a version marker, per-day tallies keyed
+// by "YYYY-MM-DD", and rolling quiet-gap samples. The version lets a future format change be detected rather
 // than silently misread.
 //
 // The inlined Windows/Seconds fields exist only to migrate a legacy single-day
@@ -56,8 +58,9 @@ type DayStat struct {
 // the current per-day format transparently on first load. New writes never set
 // them; see read for the migration.
 type data struct {
-	Version int                `json:"version"`
-	Days    map[string]DayStat `json:"days"`
+	Version     int                        `json:"version"`
+	Days        map[string]DayStat         `json:"days"`
+	IdleSamples map[string][]time.Duration `json:"idle_samples,omitempty"`
 
 	// Legacy top-level tally (pre-history format). Read-only migration source.
 	LegacyWindows int   `json:"windows,omitempty"`
@@ -125,6 +128,35 @@ func DefaultPath() (string, error) {
 
 // Path returns the file path this Store reads and writes.
 func (s *Store) Path() string { return s.path }
+
+// IdleSamples returns the recent completed quiet gaps for a command key.
+func (s *Store) IdleSamples(command string) ([]time.Duration, error) {
+	d, err := s.read()
+	if err != nil {
+		return nil, err
+	}
+	return d.IdleSamples[command], nil
+}
+
+// RecordIdleWindow saves a quiet gap independently of reclaimed BUSY statistics.
+func (s *Store) RecordIdleWindow(command string, gap time.Duration) error {
+	if command == "" || gap < time.Second {
+		return fmt.Errorf("idle sample requires a command and a duration of at least 1s")
+	}
+	d, err := s.read()
+	if err != nil {
+		return err
+	}
+	if d.IdleSamples == nil {
+		d.IdleSamples = make(map[string][]time.Duration)
+	}
+	samples := append(d.IdleSamples[command], gap)
+	if len(samples) > detect.AdaptiveHistoryLimit {
+		samples = samples[len(samples)-detect.AdaptiveHistoryLimit:]
+	}
+	d.IdleSamples[command] = samples
+	return s.write(d)
+}
 
 // Record adds one completed BUSY window of the given reclaimed duration to
 // today's tally and persists the file. A non-positive duration still counts as

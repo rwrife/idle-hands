@@ -6,7 +6,71 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/rwrife/idle-hands/internal/detect"
 )
+
+func TestIdleHistoryRoundTripAndStats(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	st, err := New(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := st.IdleSamples("claude")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("missing history = %v, %v", empty, err)
+	}
+	for i := 1; i <= detect.AdaptiveHistoryLimit+2; i++ {
+		if err := st.RecordIdleWindow("claude", time.Duration(i)*time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RecordIdleWindow("aider", 7*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Record(12 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := New(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := fresh.IdleSamples("claude")
+	if err != nil || len(history) != detect.AdaptiveHistoryLimit || history[0] != 3*time.Second {
+		t.Fatalf("rolling history = %v, %v", history, err)
+	}
+	other, err := fresh.IdleSamples("aider")
+	if err != nil || len(other) != 1 || other[0] != 7*time.Second {
+		t.Fatalf("other command history = %v, %v", other, err)
+	}
+	today, err := fresh.Today()
+	if err != nil || today.Windows != 1 || today.Seconds != 12 {
+		t.Fatalf("history changed stats: %+v, %v", today, err)
+	}
+}
+
+func TestIdleHistoryErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	st, err := New(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordIdleWindow("", time.Second); err == nil {
+		t.Fatal("accepted empty command")
+	}
+	if err := st.RecordIdleWindow("claude", -time.Second); err == nil {
+		t.Fatal("accepted negative duration")
+	}
+	if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.IdleSamples("claude"); err == nil {
+		t.Fatal("ignored corrupt history")
+	}
+	if err := st.RecordIdleWindow("claude", time.Second); err == nil {
+		t.Fatal("overwrote corrupt history")
+	}
+}
 
 // fixedClock returns a Now func pinned to the given time, for deterministic
 // day-keying in tests.

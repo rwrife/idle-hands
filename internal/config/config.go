@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,8 @@ const DefaultDeck = "move"
 // none. It mirrors detect.DefaultBusyThreshold (kept as a literal here to avoid
 // a dependency cycle and to keep config self-describing).
 const DefaultBusyThreshold = 20 * time.Second
+
+const DefaultAdaptivePercentile = 75
 
 // DefaultJSONFD is the file descriptor the ndjson event stream writes to when
 // enabled without an explicit json_fd. 2 is stderr, keeping the wrapped agent's
@@ -77,6 +80,10 @@ type Config struct {
 	Deck string
 	// BusyThreshold is how long output must stay quiet before a card fires.
 	BusyThreshold time.Duration
+	// Adaptive enables per-command learned thresholds in wrapped mode.
+	Adaptive bool
+	// AdaptivePercentile selects a percentile in (0, 100], default 75.
+	AdaptivePercentile float64
 	// BusyThresholdSet reports whether busy_threshold was explicitly present in
 	// the config file (as opposed to defaulted). Consumers such as the --preset
 	// flag use it to decide precedence: an explicit config value wins over a
@@ -213,21 +220,23 @@ type QuietHours struct {
 // resolved runtime type (time.Duration, parsed clock times), and so unknown or
 // omitted keys fall back to defaults cleanly.
 type fileConfig struct {
-	Deck          string         `toml:"deck"`
-	BusyThreshold string         `toml:"busy_threshold"`
-	Quiet         fileQuietHours `toml:"quiet_hours"`
-	SRSSource     string         `toml:"srs_source"`
-	SRSReveal     string         `toml:"srs_reveal"`
-	SRSSpacing    *int           `toml:"srs_spacing"`
-	DuckDiffModel string         `toml:"duckdiff_model"`
-	DuckDiffURL   string         `toml:"duckdiff_url"`
-	DuckDiffTO    string         `toml:"duckdiff_timeout"`
-	HookTimeout   string         `toml:"hook_timeout"`
-	Hooks         []fileHook     `toml:"hooks"`
-	FocusSafe     fileFocusSafe  `toml:"focus_safe"`
-	JSON          *bool          `toml:"json"`
-	JSONFD        *int           `toml:"json_fd"`
-	Decks         fileDecks      `toml:"decks"`
+	Deck               string         `toml:"deck"`
+	BusyThreshold      string         `toml:"busy_threshold"`
+	Adaptive           bool           `toml:"adaptive"`
+	AdaptivePercentile *float64       `toml:"adaptive_percentile"`
+	Quiet              fileQuietHours `toml:"quiet_hours"`
+	SRSSource          string         `toml:"srs_source"`
+	SRSReveal          string         `toml:"srs_reveal"`
+	SRSSpacing         *int           `toml:"srs_spacing"`
+	DuckDiffModel      string         `toml:"duckdiff_model"`
+	DuckDiffURL        string         `toml:"duckdiff_url"`
+	DuckDiffTO         string         `toml:"duckdiff_timeout"`
+	HookTimeout        string         `toml:"hook_timeout"`
+	Hooks              []fileHook     `toml:"hooks"`
+	FocusSafe          fileFocusSafe  `toml:"focus_safe"`
+	JSON               *bool          `toml:"json"`
+	JSONFD             *int           `toml:"json_fd"`
+	Decks              fileDecks      `toml:"decks"`
 }
 
 // fileDecks is the wire shape of the [decks] block. RepoDiscovery is a pointer
@@ -257,9 +266,10 @@ type fileQuietHours struct {
 // in too, though they only matter once the user selects deck = "srs".
 func Default() Config {
 	return Config{
-		Deck:          DefaultDeck,
-		BusyThreshold: DefaultBusyThreshold,
-		Quiet:         QuietHours{},
+		Deck:               DefaultDeck,
+		BusyThreshold:      DefaultBusyThreshold,
+		AdaptivePercentile: DefaultAdaptivePercentile,
+		Quiet:              QuietHours{},
 		SRS: SRSConfig{
 			Reveal:  DefaultSRSReveal,
 			Spacing: DefaultSRSSpacing,
@@ -358,6 +368,14 @@ func Parse(data []byte) (Config, error) {
 	}
 
 	cfg := Default()
+	cfg.Adaptive = fc.Adaptive
+	if fc.AdaptivePercentile != nil {
+		p := *fc.AdaptivePercentile
+		if math.IsNaN(p) || math.IsInf(p, 0) || p <= 0 || p > 100 {
+			return Config{}, fmt.Errorf("adaptive_percentile must be greater than 0 and at most 100, got %v", p)
+		}
+		cfg.AdaptivePercentile = p
+	}
 
 	if v := strings.TrimSpace(fc.Deck); v != "" {
 		cfg.Deck = v

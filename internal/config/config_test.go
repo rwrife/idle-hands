@@ -9,6 +9,27 @@ import (
 	"time"
 )
 
+func TestAdaptiveConfig(t *testing.T) {
+	for _, text := range []string{"", "adaptive = false", "adaptive = true"} {
+		cfg, err := Parse([]byte(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Adaptive != (text == "adaptive = true") || cfg.AdaptivePercentile != 75 {
+			t.Fatalf("unexpected adaptive config for %q: %+v", text, cfg)
+		}
+	}
+	cfg, err := Parse([]byte("adaptive = true\nadaptive_percentile = 82.5"))
+	if err != nil || cfg.AdaptivePercentile != 82.5 {
+		t.Fatalf("custom percentile: %+v, %v", cfg, err)
+	}
+	for _, value := range []string{"0", "-1", "101", "nan", "inf", "-inf", `"75"`, "true"} {
+		if _, err := Parse([]byte("adaptive_percentile = " + value)); err == nil {
+			t.Errorf("accepted invalid percentile %s", value)
+		}
+	}
+}
+
 func TestDefault(t *testing.T) {
 	got := Default()
 	if got.Deck != DefaultDeck {
