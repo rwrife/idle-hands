@@ -42,9 +42,9 @@ type WeightedPicker struct {
 	window int
 }
 
-// NewWeightedPicker creates a picker whose per-deck probability follows Weight,
-// independent of the number of cards in that deck. It avoids recent card IDs
-// when alternatives exist; rng is injectable for deterministic tests.
+// NewWeightedPicker splits each deck's weight evenly across its cards, so a
+// deck's card count does not affect its total weight before recency exclusions.
+// rng is injectable for deterministic tests.
 func NewWeightedPicker(decks []WeightedDeck, rng *rand.Rand, window int) (*WeightedPicker, error) {
 	if len(decks) == 0 {
 		return nil, fmt.Errorf("weighted picker needs at least one deck")
