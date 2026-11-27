@@ -193,6 +193,9 @@ func (s Source) String() string {
 // Entry is one deck in the resolved catalog: the deck itself, where it came
 // from, and (for a user deck) whether it overrides a built-in of the same name.
 type Entry struct {
+	// Key is the selector accepted by ResolveWithRepo (a team file's namespace
+	// can differ from its declared deck name).
+	Key    string
 	Deck   Deck
 	Source Source
 	// Shadows is true when this is a user deck whose name also exists as a
@@ -297,15 +300,15 @@ func CatalogWithRepo(userDir string, repoDirs []string) ([]Entry, error) {
 
 	byName := make(map[string]Entry, len(builtins)+len(user)+len(repo))
 	for name, d := range builtins {
-		byName[name] = Entry{Deck: d, Source: SourceBuiltin}
+		byName[name] = Entry{Key: name, Deck: d, Source: SourceBuiltin}
 	}
 	for name, d := range user {
 		_, shadows := builtins[name]
-		byName[name] = Entry{Deck: d, Source: SourceUser, Shadows: shadows}
+		byName[name] = Entry{Key: name, Deck: d, Source: SourceUser, Shadows: shadows}
 	}
 	for name, d := range repo {
 		_, shadows := byName[name]
-		byName[name] = Entry{Deck: d, Source: SourceRepo, Shadows: shadows}
+		byName[name] = Entry{Key: name, Deck: d, Source: SourceRepo, Shadows: shadows}
 	}
 
 	names := make([]string, 0, len(byName))

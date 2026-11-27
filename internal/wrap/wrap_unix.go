@@ -14,6 +14,15 @@ import (
 	"golang.org/x/term"
 )
 
+// ProbePTY checks allocation without starting a child or changing terminal mode.
+func ProbePTY() error {
+	master, slave, err := pty.Open()
+	if err != nil {
+		return err
+	}
+	return errors.Join(slave.Close(), master.Close())
+}
+
 // Run executes the command described by cfg under a pseudo-terminal, passing
 // I/O through transparently and mirroring output to cfg.Tap. It blocks until
 // the child exits and returns how it terminated.

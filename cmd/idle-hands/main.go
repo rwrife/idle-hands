@@ -40,6 +40,7 @@ Commands:
   signal busy|idle           Send one busy/idle event to the running listener.
   deck [name]                List decks, or preview one deck's cards.
   preset [name]              List agent presets, or show one preset's tuning.
+  doctor [--json]            Diagnose detection, config, decks, and state storage.
   stats                      Show reclaimed idle time ("reclaimed X min today").
   recap [--weekly]           Roundup: today + rolling-7-day reclaimed time and
                              your current streak. --weekly adds a per-day view.
@@ -151,6 +152,13 @@ func run(args []string) int {
 
 	case "stats":
 		code, err := cmdStats(rest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
+		}
+		return code
+
+	case "doctor":
+		code, err := cmdDoctor(rest)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "idle-hands: "+err.Error())
 		}
