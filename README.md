@@ -56,6 +56,7 @@ idle-hands watch --preset claude -- claude # tune detection for a known agent
 idle-hands watch --json -- claude          # emit ndjson busy/idle events on stderr
 idle-hands deck                            # see the available decks
 idle-hands preset                          # see the agent presets
+idle-hands doctor                          # diagnose detection/setup problems
 idle-hands stats                           # "reclaimed 14 min across 9 waits today"
 idle-hands recap                           # today + this week + your streak 🔥
 ```
@@ -74,6 +75,35 @@ threshold, and quiet hours come from `~/.idle-hands/config.toml`; every reclaime
 window is tallied to `~/.idle-hands/state.json` for `idle-hands stats`. Pass
 `--preset <agent>` to start from detection tuning matched to a known agent (see
 [Agent presets](#agent-presets)).
+
+## Diagnose setup problems
+
+Run `idle-hands doctor` when cards never fire or fire too often. It reports the
+OS and actual PTY allocation availability (Windows uses stdio passthrough),
+config path and effective settings, baseline busy threshold, state path and
+writability, resolved decks grouped by embedded/user/team source with deck and
+card counts, and whether quiet hours or focus-safe are active right now.
+Deck overrides use the same precedence as `watch`; team names are their file
+selectors. Configured flashcards and live decks appear under `dynamic`.
+
+`idle-hands doctor --json` writes one compact newline-delimited JSON object to
+stdout with `event: "doctor"`, a UTC `ts`, the diagnostics, and `warnings` and
+`errors` arrays. Unlike `watch` events, this is the command's result, so it
+does not use stderr or the configured `json_fd`. Exit status is **0** for a
+healthy setup (warnings allowed), **1** for hard errors, and **2** for bad
+arguments. Hard errors include a missing config directory, invalid config or
+selected deck, corrupt state/focus data, or unwritable state storage.
+
+A missing `config.toml` is optional and uses defaults, but a missing
+`~/.idle-hands` directory is reported as a hard setup problem; create that
+directory and rerun. Doctor never creates it or changes config, stats, or focus
+state. The writability check creates, writes, and removes a temporary file in
+the state directory without replacing `state.json`.
+
+Doctor does not launch wrapped commands, hooks, or model requests. Live deck
+counts describe their configured card slots, not a successful execution.
+Preset flags and per-command adaptive history can change the threshold used by
+`watch`; doctor reports the configured baseline, not a running session's value.
 
 ## Standalone watcher mode (GUI agents / no wrapping)
 
