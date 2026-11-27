@@ -202,7 +202,7 @@ func DefaultTheme() Theme {
 type Renderer struct {
 	w      io.Writer
 	deck   deck.Deck
-	picker *Picker
+	picker selectionPicker
 	theme  Theme
 
 	// width is the target render width for the card box (content + border).
@@ -262,9 +262,9 @@ type Options struct {
 	Width int
 	// Rand is the source for card selection. nil selects a time-seeded default.
 	Rand *rand.Rand
-	// Spacing is the number of recently-shown cards to deprioritize (in
-	// addition to never immediately repeating). 0 keeps the plain M4 behavior;
-	// the flashcard deck sets it so a card isn't re-shown for a few waits.
+	// Spacing is the number of recently-shown cards to avoid when alternatives
+	// exist (in addition to never immediately repeating). SRS and weighted decks
+	// set it so a card isn't re-shown for a few waits.
 	Spacing int
 	// Reveal, when > 0, shows the card front first and reveals the answer after
 	// this delay (used by the flashcard deck). The reveal never blocks or reads
@@ -294,6 +294,11 @@ const defaultWidth = 60
 
 // NewRenderer builds a Renderer writing to w.
 func NewRenderer(w io.Writer, opts Options) *Renderer {
+	picker := &singleDeckPicker{deck: opts.Deck, picker: NewSpacedPicker(opts.Deck, opts.Rand, opts.Spacing)}
+	return newRenderer(w, opts, picker)
+}
+
+func newRenderer(w io.Writer, opts Options, picker selectionPicker) *Renderer {
 	theme := DefaultTheme()
 	if opts.Theme != nil {
 		theme = *opts.Theme
@@ -315,7 +320,7 @@ func NewRenderer(w io.Writer, opts Options) *Renderer {
 	return &Renderer{
 		w:         w,
 		deck:      opts.Deck,
-		picker:    NewSpacedPicker(opts.Deck, opts.Rand, opts.Spacing),
+		picker:    picker,
 		theme:     theme,
 		width:     width,
 		reveal:    reveal,
@@ -343,7 +348,9 @@ func (r *Renderer) OnBusy(idleFor time.Duration) {
 	if r.shown {
 		return // already showed this window's one card
 	}
-	c := r.picker.Next()
+	selectedDeck, c := r.picker.Next()
+	r.deck = selectedDeck
+	r.deckName = selectedDeck.Name
 	r.cur = c
 	r.curIdle = idleFor
 	// Reveal only makes sense when we both have a delay and a body to hide.
