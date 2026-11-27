@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -443,6 +444,33 @@ func joinNames() string {
 func newCardRenderer(cfg config.Config, em *events.Emitter) *card.Renderer {
 	onShow := func(deck, title string) { em.CardShown(deck, title) }
 	onDismiss := func() { em.CardDismissed() }
+	if len(cfg.DeckWeights) > 0 {
+		userDir, err := config.DecksDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "idle-hands: weighted decks unavailable (%v); using plain notices\n", err)
+			return nil
+		}
+		var repoDirs []string
+		if cfg.Decks.RepoDiscovery {
+			repoDirs, err = deck.DiscoverRepoDeckDirs("")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "idle-hands: team deck discovery unavailable (%v)\n", err)
+			}
+		}
+		weightedDecks, err := loadWeightedDecks(cfg.DeckWeights, userDir, repoDirs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "idle-hands: weighted decks unavailable (%v); using plain notices\n", err)
+			return nil
+		}
+		r, err := card.NewWeightedRenderer(os.Stderr, card.Options{
+			Spacing: cfg.DeckSpacing, OnShow: onShow, OnDismiss: onDismiss,
+		}, weightedDecks)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "idle-hands: weighted decks unavailable (%v); using plain notices\n", err)
+			return nil
+		}
+		return r
+	}
 	if cfg.Deck == srs.DeckName {
 		d, err := srs.LoadDeck(cfg.SRS.Source)
 		if err != nil {
@@ -526,6 +554,23 @@ func newCardRenderer(cfg config.Config, em *events.Emitter) *card.Renderer {
 		return nil
 	}
 	return card.NewRenderer(os.Stderr, card.Options{Deck: d, OnShow: onShow, OnDismiss: onDismiss})
+}
+
+func loadWeightedDecks(weights map[string]int, userDir string, repoDirs []string) ([]card.WeightedDeck, error) {
+	names := make([]string, 0, len(weights))
+	for name := range weights {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	decks := make([]card.WeightedDeck, 0, len(names))
+	for _, name := range names {
+		d, _, err := deck.ResolveWithRepo(name, userDir, repoDirs)
+		if err != nil {
+			return nil, fmt.Errorf("deck %q: %w", name, err)
+		}
+		decks = append(decks, card.WeightedDeck{Deck: d, Weight: weights[name]})
+	}
+	return decks, nil
 }
 
 // newBufRenderer builds a card.Renderer for deck d writing to w. It exists so

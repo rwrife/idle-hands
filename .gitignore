@@ -3,6 +3,7 @@
 /idle-hands.exe
 /dist/
 /bin/
+/.worktrees/
 
 # Go
 *.test

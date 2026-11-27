@@ -15,9 +15,11 @@ func TestAdaptiveConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		if cfg.Adaptive != (text == "adaptive = true") || cfg.AdaptivePercentile != 75 {
 			t.Fatalf("unexpected adaptive config for %q: %+v", text, cfg)
 		}
+
 	}
 	cfg, err := Parse([]byte("adaptive = true\nadaptive_percentile = 82.5"))
 	if err != nil || cfg.AdaptivePercentile != 82.5 {
@@ -26,6 +28,29 @@ func TestAdaptiveConfig(t *testing.T) {
 	for _, value := range []string{"0", "-1", "101", "nan", "inf", "-inf", `"75"`, "true"} {
 		if _, err := Parse([]byte("adaptive_percentile = " + value)); err == nil {
 			t.Errorf("accepted invalid percentile %s", value)
+		}
+	}
+}
+
+func TestWeightedDeckConfig(t *testing.T) {
+	cfg, err := Parse([]byte("card_spacing = 2\n[weights]\nmove = 3\nduck = 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.DeckWeights, map[string]int{"move": 3, "duck": 1}) || cfg.DeckSpacing != 2 {
+		t.Fatalf("weighted config = %+v, want weights and spacing", cfg)
+	}
+	defaults, err := Parse(nil)
+	if err != nil || len(defaults.DeckWeights) != 0 || defaults.DeckSpacing != DefaultCardSpacing {
+		t.Fatalf("defaults = %+v, %v", defaults, err)
+	}
+	for _, text := range []string{
+		"[weights]\nmove = 0",
+		"[weights]\nmove = -1",
+		"card_spacing = -1",
+	} {
+		if _, err := Parse([]byte(text)); err == nil {
+			t.Errorf("accepted invalid weighted config %q", text)
 		}
 	}
 }
