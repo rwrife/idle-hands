@@ -38,6 +38,8 @@ const DefaultBusyThreshold = 20 * time.Second
 
 const DefaultAdaptivePercentile = 75
 
+const DefaultCardSpacing = 3
+
 // DefaultJSONFD is the file descriptor the ndjson event stream writes to when
 // enabled without an explicit json_fd. 2 is stderr, keeping the wrapped agent's
 // stdout/PTY untouched.
@@ -78,6 +80,10 @@ const (
 type Config struct {
 	// Deck is the name of the deck to show during a BUSY window (e.g. "move").
 	Deck string
+	// DeckWeights selects and weights multiple static decks when non-empty.
+	DeckWeights map[string]int
+	// DeckSpacing is the number of recently shown cards to avoid across decks.
+	DeckSpacing int
 	// BusyThreshold is how long output must stay quiet before a card fires.
 	BusyThreshold time.Duration
 	// Adaptive enables per-command learned thresholds in wrapped mode.
@@ -221,6 +227,8 @@ type QuietHours struct {
 // omitted keys fall back to defaults cleanly.
 type fileConfig struct {
 	Deck               string         `toml:"deck"`
+	DeckWeights        map[string]int `toml:"weights"`
+	DeckSpacing        *int           `toml:"card_spacing"`
 	BusyThreshold      string         `toml:"busy_threshold"`
 	Adaptive           bool           `toml:"adaptive"`
 	AdaptivePercentile *float64       `toml:"adaptive_percentile"`
@@ -267,6 +275,8 @@ type fileQuietHours struct {
 func Default() Config {
 	return Config{
 		Deck:               DefaultDeck,
+		DeckWeights:        map[string]int{},
+		DeckSpacing:        DefaultCardSpacing,
 		BusyThreshold:      DefaultBusyThreshold,
 		AdaptivePercentile: DefaultAdaptivePercentile,
 		Quiet:              QuietHours{},
@@ -420,8 +430,31 @@ func Parse(data []byte) (Config, error) {
 	if fc.Decks.RepoDiscovery != nil {
 		cfg.Decks.RepoDiscovery = *fc.Decks.RepoDiscovery
 	}
+	if err := applyWeights(&cfg, fc); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
+}
+
+func applyWeights(cfg *Config, fc fileConfig) error {
+	if fc.DeckSpacing != nil {
+		if *fc.DeckSpacing < 0 {
+			return fmt.Errorf("card_spacing must be >= 0, got %d", *fc.DeckSpacing)
+		}
+		cfg.DeckSpacing = *fc.DeckSpacing
+	}
+	for name, weight := range fc.DeckWeights {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("weights: deck name is required")
+		}
+		if weight <= 0 {
+			return fmt.Errorf("weights.%s must be positive, got %d", name, weight)
+		}
+		cfg.DeckWeights[name] = weight
+	}
+	return nil
 }
 
 // applyJSON resolves the ndjson event-stream settings. Both keys are optional:

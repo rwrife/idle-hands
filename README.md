@@ -552,6 +552,7 @@ deck = "duck"            # which deck to show: move | duck | tidy | srs | duckdi
 busy_threshold = "30s"  # how long output must stay quiet before a card fires
 adaptive = false       # opt into learned thresholds for wrapped commands
 adaptive_percentile = 75 # percentile of recent quiet gaps (greater than 0, up to 100)
+card_spacing = 3       # weighted mode: avoid the last 3 cards when possible
 
 [quiet_hours]           # suppress cards during these local hours (optional)
 start = "22:00"         # cards are withheld 22:00 → 07:00; the agent is still
@@ -565,6 +566,10 @@ json_fd = 2             # descriptor for events; only 2 (stderr) is supported
 
 [decks]                 # deck discovery (optional)
 repo_discovery = true   # load repo-local .idle-hands/decks/*.toml (team decks)
+[weights]               # select multiple static decks; per-deck relative weights
+move = 3
+duck = 1
+tidy = 1
 ```
 
 Quiet-hours ranges may wrap past midnight (e.g. `22:00`→`07:00`). An unknown key
@@ -596,6 +601,16 @@ The **hook** deck adds `hook_timeout` (the hard per-hook ceiling, default `10s`)
 and one or more `[[hooks]]` blocks — each with a `name` and an argv `cmd`. Only
 the commands you list here ever run; see
 [Custom card hooks](#custom-card-hooks-do-real-work-during-the-wait) above.
+
+The optional `[weights]` table selects multiple built-in, user, or team decks
+instead of the single `deck` setting. Each positive integer is a relative
+weight, so the example above picks `move` about three times as often as `duck`
+or `tidy`, regardless of how many cards each deck contains. Omitted weights are
+not active; without the table, the existing single-deck behavior is unchanged.
+`card_spacing` (default `3`, set to `0` to disable) avoids recently shown cards
+across the selected decks when enough alternatives exist, while always avoiding
+an immediate repeat when possible. Dynamic `srs`, `hook`, and `duckdiff` decks
+are configured separately and cannot be included in `[weights]`.
 
 The **json** event stream adds two optional keys — `json` (enable the ndjson
 stream, same as the `--json` flag) and `json_fd` (the target descriptor, default
