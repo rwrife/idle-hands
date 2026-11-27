@@ -191,11 +191,16 @@ func resolveDoctor(paths doctorPaths, now time.Time) doctorReport {
 	}
 	r.Decks["dynamic"] = append(r.Decks["dynamic"], doctorDeck{Name: duckdiff.DeckName, Cards: 1, Live: true})
 	r.Warnings = append(r.Warnings, "duckdiff model and staged diff were not probed; runtime may fall back to duck")
-	switch cfg.Deck {
-	case srs.DeckName, hook.DeckName, duckdiff.DeckName:
-	default:
-		_, _, err := deck.ResolveWithRepo(cfg.Deck, paths.userDecks, repoDirs)
-		problem("selected deck", err)
+	if len(cfg.DeckWeights) > 0 {
+		_, err := loadWeightedDecks(cfg.DeckWeights, paths.userDecks, repoDirs)
+		problem("weighted decks", err)
+	} else {
+		switch cfg.Deck {
+		case srs.DeckName, hook.DeckName, duckdiff.DeckName:
+		default:
+			_, _, err := deck.ResolveWithRepo(cfg.Deck, paths.userDecks, repoDirs)
+			problem("selected deck", err)
+		}
 	}
 	return r
 }
@@ -208,7 +213,8 @@ func doctorConfig(cfg config.Config) map[string]any {
 		cfg.DuckDiff.URL = duckdiff.DefaultURL
 	}
 	return map[string]any{
-		"deck": cfg.Deck, "busy_threshold": cfg.BusyThreshold.String(),
+		"deck": cfg.Deck, "weights": cfg.DeckWeights, "card_spacing": cfg.DeckSpacing,
+		"busy_threshold":     cfg.BusyThreshold.String(),
 		"busy_threshold_set": cfg.BusyThresholdSet,
 		"adaptive":           cfg.Adaptive, "adaptive_percentile": cfg.AdaptivePercentile,
 		"quiet_hours": map[string]string{"start": cfg.Quiet.Start.String(), "end": cfg.Quiet.End.String()},

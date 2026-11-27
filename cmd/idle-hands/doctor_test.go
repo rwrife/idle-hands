@@ -118,6 +118,30 @@ func TestDoctorDefaultsJSONAndHumanOutput(t *testing.T) {
 	}
 }
 
+func TestDoctorWeightedDecks(t *testing.T) {
+	t.Run("reports valid weights and ignores the single deck", func(t *testing.T) {
+		p := doctorTestPaths(t)
+		doctorWrite(t, p.config, "deck = 'missing'\ncard_spacing = 5\n[weights]\nmove = 2\n")
+		r := resolveDoctor(p, time.Now())
+		if len(r.Errors) != 0 {
+			t.Fatalf("unexpected errors: %v", r.Errors)
+		}
+		if !reflect.DeepEqual(r.EffectiveConfig["weights"], map[string]int{"move": 2}) || r.EffectiveConfig["card_spacing"] != 5 {
+			t.Fatalf("weighted config not reported: %+v", r.EffectiveConfig)
+		}
+	})
+
+	t.Run("reports unknown weighted decks", func(t *testing.T) {
+		p := doctorTestPaths(t)
+		doctorWrite(t, p.config, "deck = 'missing'\n[weights]\nunknown = 1\n")
+		r := resolveDoctor(p, time.Now())
+		errors := strings.Join(r.Errors, "\n")
+		if !strings.Contains(errors, "weighted decks") || strings.Contains(errors, "selected deck") {
+			t.Fatalf("weighted deck validation errors = %v", r.Errors)
+		}
+	})
+}
+
 func TestDoctorHardErrors(t *testing.T) {
 	for _, name := range []string{"missing config directory", "state is directory", "malformed config", "malformed state", "malformed focus", "unknown deck", "invalid user deck", "missing srs", "missing hooks"} {
 		t.Run(name, func(t *testing.T) {
